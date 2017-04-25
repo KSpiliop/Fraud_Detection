@@ -65,11 +65,6 @@ dat['Class'].value_counts()
     
     The distribution of the target variable:
     
-    
-
-
-
-
     0    284315
     1       492
     Name: Class, dtype: int64
@@ -442,7 +437,7 @@ At each iteration of the Simulated Annealing algorith, one combination of hyper-
 
 The temperature starts at a fixed value T0 and is reduced by a factor of alpha < 1 every n number of iterations. Here T0 = 0.40, n=5 and a = 0.85. The beta constant is 1.3.  
 
-The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.150, 0.075, 0.038, 0.019, 0.009, i.e. starting from 0.150 and dividing by 2. We set these average probabilities to be around 50% during the first, second,...,fifth 20 iterations respectively and we use Excel Solver to find suitable parameters. The Excel file can be found **put link**.
+The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.150, 0.075, 0.038, 0.019, 0.009, i.e. starting from 0.150 and dividing by 2. We set these average probabilities to be around 50% during the first, second,...,fifth 20 iterations respectively and we use Excel Solver to find suitable parameters. The Excel file can be found [here](Data/parameters_for_SA.xlsx).
 
 A **warning**: if the number of iterations is not suficiently smaller than the total number of combinations, there may be too many  repetitions and delays. The simple approach for producing combinations here does not address such cases.  
 
@@ -631,7 +626,7 @@ print(best_params)
 
 ## Evaluation on the test dataset.
 
-The evaluation on the test dataset results to an F-Score of 0.81 which is considered good given the high imbalance in the classes. The run time was 22 minutes. 
+The evaluation on the test dataset results to an F-Score of 0.84 which is considered good given the high imbalance in the classes. The run time was 26 minutes. 
 
 The best hyper-parameters found are in the ranges expected to be good according to all sources. One can then proceed this way:
 * Narrowing the ranges of these hyper-parameters,   
