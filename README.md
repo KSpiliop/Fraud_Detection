@@ -1,11 +1,11 @@
 
-# Tuning XGBoost hyper-parameters with Simulated Annealing  
+# Tuning XGBoost hyper-parameters with heuristic search  
 # An example in Credit Card Fraud Detection
 
 
-The purpose of this experiment is to show how heuristics such as [Simulated Annealing](https://en.wikipedia.org/wiki/Simulated_annealing "Simulated Annealing") can be used to find good combinations of many hyper-parameters efficiently. This approach is obviously better than blind random generation. It is also preferable to fine-tuning each hyper-parameter separately because there are interactions between the hyper-parameters. 
+The purpose of this experiment is to show how heuristics such as [Simulated Annealing](https://en.wikipedia.org/wiki/Simulated_annealing "Simulated Annealing") can be used to find efficiently good combinations of hyper-parameters in machine learning algorithms. This approach is better than blind random generation of parameters. It is also preferable to fine-tuning each hyper-parameter separately because typically there are interactions between them. 
 
-The XGBoost algorithm is a good case because it has many hyper-parameters. Exhaustive grid search can be computationally prohibitive.   
+The XGBoost algorithm is a good show case because it has many hyper-parameters. Exhaustive grid search can be computationally prohibitive.   
 
 For a very good discussion of the theoretical details of XGBoost, see this [Slideshare presentation](https://www.slideshare.net/ShangxuanZhang/kaggle-winning-solution-xgboost-algorithm-let-us-learn-from-its-author "Slideshare presentation") of the algorithm with title "*Kaggle Winning Solution Xgboost algorithm -- Let us learn from its author*" by Tianqi Chen.
 
@@ -14,7 +14,7 @@ For a very good discussion of the theoretical details of XGBoost, see this [Slid
 
 This is a Kaggle dataset taken from [here](https://www.kaggle.com/dalpozz/creditcardfraud "Kaggle dataset") which contains credit card transactions data and a fraud flag. It appeared originally in [Dal Pozzolo, Andrea, et al. "Calibrating Probability with Undersampling for Unbalanced Classification." Computational Intelligence, 2015 IEEE Symposium Series on. IEEE, 2015](http://www.oliviercaelen.be/doc/SSCI_calib_final.pdf "Original paper"). There is a Time variable (seconds from the first transaction in the dataset), an Amount variable, the Class variable (1=fraud, 0= no fraud) and the rest (V1-V28) are factor variables obtained through Principal Components Analysis from the original variables.
 
-This is not a very difficult case for XGBoost as it will be seen. The main objective in this experiment is to show that the heuristic search finds a suitable set of hyper-parameters out of a quite large set of combinations.
+This is not a very difficult case for XGBoost as it will be seen. The main objective in this experiment is to show that the heuristic search finds a suitable set of hyper-parameters out of a quite large set of potential combinations.
 
 We can verify below that this is a highly imbalanced dataset, typical of fraud detection data. We will take this into account when setting the weights of observations in XGBoost parameters. 
 
@@ -26,6 +26,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 %matplotlib inline
+
+import random
+random.seed(1234)
 
 plt.style.use('ggplot')
 
@@ -75,9 +78,9 @@ dat['Class'].value_counts()
 
 ## Data exploration.
 
-Although the context of most of the variables is not known (recall, V1-V28 are factors summarizing the transactional data), we know that V1-V28 are by construction standardized, with a mean of 0 and and a standard deviation of 1. We standardize the Time and Amount variables too.
+Although the context of most of the variables is not known (recall that V1-V28 are factors summarizing the transactional data), we know that V1-V28 are by construction standardized, with a mean of 0 and and a standard deviation of 1. We standardize the Time and Amount variables too.
 
-The data exploration and in particular Welch’s t-tests reveal that almost all the factors are significantly associated with the Class variable. The mean of these variables is almost zero in Class 0 and clearly non-zero in Class 1. The Time and Amount variables are also significant. There does not seem to by any reason for variable selection.
+The data exploration and in particular Welch’s t-tests reveal that almost all the factors are significantly associated with the Class variable. The mean of these variables is almost zero in Class 0 and clearly non-zero in Class 1. The Time and Amount variables are also significant. There does not seem to by any reason for variable selection yet.
 
 Some of the factors (and the Amount variable) are quite skewed and have very thin distributions. If we were to apply some other method (say, logistic regression) we could apply some transformations (and probably binning) but XGBoost is insensitive to such deviations from normality.  
 
@@ -91,7 +94,7 @@ dat['Time'] = preprocessing.scale(dat['Time'])
 dat['Amount'] = preprocessing.scale(dat['Amount'])
 
 print('\nMeans of variables in the two Class categories:\n')
-pt = pd.pivot_table(dat, values=dat.columns[:30], columns = 'Class', aggfunc='mean')
+pt = pd.pivot_table(dat, values=dat.columns, columns = 'Class', aggfunc='mean')
 print(pt.loc[dat.columns])
 
 print('\nP-values of Welch’s t-tests and shape statistics:\n')
@@ -198,27 +201,24 @@ In this step, we partition the dataset into 40% training, 30% validation and 30%
 
 
 ```python
-import random
 
-random.seed(1234)
 
 Class = dat['Class'].values
-dat2 = dat.drop(['Class'], axis=1)
 
 allIndices = np.arange(len(Class))
-np.random.shuffle(allIndices)
+np.random.shuffle(allIndices) ## shuffle the indices of the observations
 
 numTrain = int(round(0.40*len(Class)))
 numValid = int(round(0.30*len(Class)))
 numTest = len(Class)-numTrain-numValid
 
-inTrain = sorted(allIndices[:numTrain])
-inValid = sorted(allIndices[numTrain:(numTrain+numValid)])
-inTest =  sorted(allIndices[(numTrain+numValid):])
+inTrain = allIndices[:numTrain]
+inValid = allIndices[numTrain:(numTrain+numValid)]
+inTest =  allIndices[(numTrain+numValid):]
 
-train = dat2.iloc[inTrain,:]
-valid= dat2.iloc[inValid,:]
-test =  dat2.iloc[inTest,:]
+train = dat.iloc[inTrain,:30]
+valid= dat.iloc[inValid,:30]
+test =  dat.iloc[inTest,:30]
 
 trainY = Class[inTrain]
 validY = Class[inValid]
@@ -227,9 +227,11 @@ testY = Class[inTest]
 
 ## Preparing the Booster: Fixed parameters.
 
-First we create the matrices in the format required by XGBoost with the xgb.DMatrix() function, passing for each dataset the predictors data and the labels. Then we set some fixed parameters. The number of boosting iterations (num_rounds) is set to 10. We initialize the **param dictionary** with silent=1 (no messages). Parameter min_child_weight is set at the default value of 1. This is the minimum weighted number of observations in a child node for further partitioning. The objective is binary classification and the evaluation metric is the Area Under Curve (AUC), the default for binary classification. In a more advanced implementation we would make a customized evaluation function, as described in [XGBoost API](http://xgboost.readthedocs.io/en/latest/python/python_api.html "XGBoost API").
+First we create the matrices in the format required by XGBoost with the xgb.DMatrix() function, passing for each dataset the predictors data and the labels. Then we set some fixed parameters. The number of boosting iterations (num_rounds) is set to 20. Normally we would use a larger number, but we want to keep the processing time low for the purposes of this experiment.
 
-We are going to **expand the param dictionary** with the parameters in the Simulated Annealing search.
+We initialize the **param dictionary** with silent=1 (no messages). Parameter min_child_weight is set at the default value of 1 because the data is highly unbalanced. This is the minimum weighted number of observations in a child node for further partitioning. The objective is binary classification and the evaluation metric is the Area Under Curve (AUC), the default for binary classification. In a more advanced implementation we could make a customized evaluation function, as described in [XGBoost API](http://xgboost.readthedocs.io/en/latest/python/python_api.html "XGBoost API"). The internal random numbers seed is set to a constant for reproducible results (this is not guaranteed though, among other reasons because XGBoost runs in threads).     
+
+We are going to **expand the param dictionary** with the parameters in the heuristic search.
 
 
 ```python
@@ -240,12 +242,13 @@ dvalid = xgb.DMatrix(valid, label=validY)
 dtest = xgb.DMatrix(test, label=testY)
 
 ## fixed parameters
-num_rounds=10 # number of boosting iterations
+num_rounds=20 # number of boosting iterations
 
 param = {'silent':1,
          'min_child_weight':1,
          'objective':'binary:logistic',
-         'eval_metric':'auc'}  
+         'eval_metric':'auc',
+         'seed' : 1234}  
 ```
 
 ## Preparing the Booster: Variable parameters 
@@ -260,17 +263,17 @@ In what follows we combine the suggestions from several sources, notably:
 
 We select several important parameters for the heuristic search:
 
-* **max_depth**: the maximum depth of a tree, in [1,∞], with default value 6. This is highly data-dependent. [2] quotes as typical values: 3-10 and [3] advises to start from 6. We choose to explore also larger values and select 5-30 levels in steps of 5.
+* **max_depth**: the maximum depth of a tree, in [1,∞], with default value 6. This is highly data-dependent. [2] quotes as typical values: 3-10 and [3] advises to start from 6. We choose to explore also larger values and select 5-25 levels in steps of 5.
 * **subsample**, in (0,1] with default value 1. This is the proportion of the training instances used in trees and smaller values can prevent over-fitting. In [2] values in 0.5-1 are suggested. [3] suggests to leave this at 1. We decide to test values in 0.5-1.0 in steps of 0.1.
 * **colsample_bytree**, in (0,1] with default value 1. This is the subsample ratio of columns (features) used to construct a tree. In [2] values in 0.5-1 are suggested. The advice in [3] is 0.3-0.5. We will try similar values as with subsample.
-* **eta** (or **learning_rate**), in [0,1], with default value 0.3. This is the shrinking rate of the feature weights and larger values (but not too high!) can be used to prevent overfitting. A suggestion in [2] is to use values in 0.01-0.2. We are generous and select the whole range in [0.1,0.4] in steps of 0.05.
-* **gamma**, in [0, ∞], with default value 0. This is the minimum loss function reduction required for a split. [3] suggests to leave this at 0. We can experiment with values in 0-2 by steps of 0.05.
-* **scale_pos_weight** which controls the balance of positive and negative weights with default value 1. The advice in [1] is to use the ratio of negative to positive cases which is 503 here, i.e. to put a weight that large to the positive cases. [2] similarly suggests a large value in case of high class imbalance as is the case here. We can try some small values and some larger ones. 
+* **eta** (or **learning_rate**), in [0,1], with default value 0.3. This is the shrinking rate of the feature weights and larger values (but not too high!) can be used to prevent overfitting. A suggestion in [2] is to use values in 0.01-0.2. We can select some values in [0.01,0.4].
+* **gamma**, in [0, ∞], with default value 0. This is the minimum loss function reduction required for a split. [3] suggests to leave this at 0. We can experiment with values in 0-2 in steps of 0.05.
+* **scale_pos_weight** which controls the balance of positive and negative weights with default value 1. The advice in [1] is to use the ratio of negative to positive cases which is 571 here, i.e. to put a weight that large to the positive cases. [2] similarly suggests a large value in case of high class imbalance as is the case here. We can try some small values and some larger ones. 
 
 
-The **total number of possible combinations** is 52920 and we are only going to test a small fraction of 100 of them, as many as the number of the Simulated Annealing iterations. 
+The **total number of possible combinations** is 43200 and we are only going to test a small fraction of 100 of them, i.e. as many as the number of the heuristic search iterations. 
 
-We also initialize a dataframe which will hold the results, for examination and also to avoid repetitions of combinations during the heuristic search.
+We also initialize a dataframe which will hold the results, for later examination and also to avoid repetitions of combinations during the search.
 
 
 
@@ -278,21 +281,18 @@ We also initialize a dataframe which will hold the results, for examination and 
 
 from collections import OrderedDict
 
-scale_pos_weight_suggestion = sum(trainY==0)/sum(trainY==1)  ## = 608
-print('Ratio of negative to positive instances: {:6.1f}'.format(scale_pos_weight_suggestion))
-event_rate = sum(trainY==1)/len(train)
-min_child_weight_suggestion = 1/np.sqrt(event_rate)
-print('1/sqrt(event rate): {:6.1f}'.format(min_child_weight_suggestion))
+ratio_neg_to_pos = sum(trainY==0)/sum(trainY==1)  ## = 608
+print('Ratio of negative to positive instances: {:6.1f}'.format(ratio_neg_to_pos))
 
 ## parameters to be tuned
 tune_dic = OrderedDict()
 
-tune_dic['max_depth']= [5,10,15,20,25,30] ## maximum tree depth
-tune_dic['subsample']=[0.5,0.6,0.7,0.8,0.9,1.0]
+tune_dic['max_depth']= [5,10,15,20,25] ## maximum tree depth
+tune_dic['subsample']=[0.5,0.6,0.7,0.8,0.9,1.0] ## proportion of training instances used in trees
 tune_dic['colsample_bytree']= [0.5,0.6,0.7,0.8,0.9,1.0] ## subsample ratio of columns
-tune_dic['eta']= [0.10,0.15,0.20,0.25,0.30,0.35,0.40]  ## learning rate
-tune_dic['gamma']= [0.00,0.05,0.10,0.15,0.20]  ##
-tune_dic['scale_pos_weight']=[30,40,50,300,400,500,600,700] 
+tune_dic['eta']= [0.01,0.05,0.10,0.20,0.30,0.40]  ## learning rate
+tune_dic['gamma']= [0.00,0.05,0.10,0.15,0.20]  ## minimum loss function reduction required for a split
+tune_dic['scale_pos_weight']=[30,40,50,300,400,500,600,700] ## relative weight of positive/negative instances
 
 lengths = [len(lst) for lst in tune_dic.values()]
 
@@ -302,40 +302,38 @@ for i in range(len(lengths)):
 print('Total number of combinations: {:16d}'.format(combs))  
 
 maxiter=100
-columns=[*tune_dic.keys()]+['F-Score','Best F-Score','Duplicate']
-results = pd.DataFrame(index=range(maxiter), columns=columns) ## to check results
+
+columns=[*tune_dic.keys()]+['F-Score','Best F-Score']
+results = pd.DataFrame(index=range(maxiter), columns=columns) ## dataframe to hold training results
 
 ```
 
-    Ratio of negative to positive instances:  560.2
-    1/sqrt(event rate):   23.7
-    Total number of combinations:            60480
+    Ratio of negative to positive instances:  524.0
+    Total number of combinations:            43200
     
 
 ## Functions for training and performance reporting.
 
 Next we define two functions:
 
-<blockquote>Function **perf_measures()** accepts some predictions and labels, optionally prints the confusion matrix, and returns the [F-Score](https://en.wikipedia.org/wiki/F1_score "F-Score") This is a measure of performance combining [precision and recall](https://en.wikipedia.org/wiki/Precision_and_recall "Precision and recall") and will guide the heuristic search.</blockquote> 
+Function **perf_measures()** accepts some predictions and labels, optionally prints the confusion matrix, and returns the [F-Score](https://en.wikipedia.org/wiki/F1_score "F-Score") This is a measure of performance combining [precision and recall](https://en.wikipedia.org/wiki/Precision_and_recall "Precision and recall") and will guide the heuristic search.
 
-<blockquote>Function **do_train()** accepts as parameters:  
-&nbsp;  
+Function **do_train()** accepts as parameters:  
 - the current choice of variable parameters in a dictionary (cur_choice),   
 - the full dictionary of parameters to be passed to the main XGBoost training routine (param),   
 - a train dataset in XGBoost format (train),   
 - a string identifier (train_s),   
 - its labels (trainY),  
 - the corresponding arguments for a validation dataset (valid, valid_s, validY),  
-- and the option to print the confusion matrix (print_conf_matrix).   
-&nbsp;  
+- and the option to print the confusion matrix (print_conf_matrix). 
+
 It then trains the model and returns the F-score of the predictions on the validation dataset together with the model. The call to the main train routine **xgb.train()** has the following arguments:   
-&nbsp;    
 - the full dictionary of the parameters (param),    
 - the train dataset in XGBoost format (train),  
 - the number of boosting iterations  (num_boost),  
 - a watchlist with datasets information to show progress (evals), 
 - the frequency of reporting (verbose_eval), here set to a high value to report only in the first and last iteration.
-</blockquote> 
+
 
 
 ```python
@@ -377,7 +375,7 @@ def do_train(cur_choice, param, train,train_s,trainY,valid,valid_s,validY,print_
     
     evallist  = [(train,train_s), (valid,valid_s)]
     model = xgb.train( param, train, num_boost_round=num_rounds,
-                      evals=evallist,verbose_eval=50)    
+                      evals=evallist,verbose_eval=False)    
     preds = model.predict(valid)
     labels = valid.get_label()
       
@@ -387,47 +385,45 @@ def do_train(cur_choice, param, train,train_s,trainY,valid,valid_s,validY,print_
 
 ```
 
-## Producing neighbouring combinations.
+## Producing neighboring combinations.
 
-Next we define a function next_choice() which either produces a random combination of the variable hyper-parameters (if no current parameters are passed) or generates a neighbour combination of hyper-parameters passed in cur_params.   
+Next we define a function next_choice() which either produces a random combination of the variable parameters (if no current parameters are passed with cur_params) or generates a neighboring combination of the parameters passed in cur_params.   
 
 In the second case we first select at random a parameter to be changed. Then:
-* If this parameter currently has the smallest value, we select the next one.
-* If this parameter currently has the largest value, we select the previous one.
+* If this parameter currently has the smallest value, we select the next (larger) one.
+* If this parameter currently has the largest value, we select the previous (smaller) one.
 * Otherwise, we select the left (smaller) or right (larger) value randomly.
 
-Repetitions are avoided in the function which carries out the Simulated Annealing search.
+Repetitions are avoided in the function which carries out the heuristic search.
 
 
 ```python
 
 
 def next_choice(cur_params=None):
-    ## returns a random combination of the variable hyper-parameters (if cur_params=None)
+    ## returns a random combination of the variable parameters (if cur_params=None)
     ## or a random neighboring combination from cur_params
     if cur_params:
         ## chose parameter to change
-        choose_param_index = np.random.randint(len(cur_params)) ## index of parameter
-        choose_param_name =[*tune_dic.keys()][choose_param_index] ## parameter name 
+        ## parameter name and current value
+        choose_param_name, cur_value = random.choice(list(cur_choice.items())) ## parameter name 
+       
+        all_values =  list(tune_dic[choose_param_name]) ## all values of selected parameter
+        cur_index = all_values.index(cur_value) ## current index of selected parameter
         
-        cur_value = cur_params[choose_param_name]
-        all_values =  list(tune_dic[choose_param_name])
-        cur_index = all_values.index(cur_value)
         if cur_index==0: ## if it is the first in the range select the second one
             next_index=1
         elif cur_index==len(all_values)-1: ## if it is the last in the range select the previous one
             next_index=len(all_values)-2
         else: ## otherwise select the left or right value randomly
-            direction=np.random.randint(2)
-            if direction==0:
-                next_index=cur_index-1
-            else:
-                next_index=cur_index+1
-        next_params = cur_params
-        next_params[choose_param_name] = all_values[next_index]
-        print('selected in next_choice: {:10s}: from {:6.2f} to {:6.2f}'.
-              format([*tune_dic.keys()][choose_param_index],all_values[cur_index],all_values[next_index] ))
-    else:
+            direction=np.random.choice([-1,1])
+            next_index=cur_index + direction
+
+        next_params = dict((k,v) for k,v in cur_params.items())
+        next_params[choose_param_name] = all_values[next_index] ## change the value of the selected parameter
+        print('selected move: {:10s}: from {:6.2f} to {:6.2f}'.
+              format(choose_param_name, cur_value, all_values[next_index] ))
+    else: ## generate a random combination of parameters
         next_params=dict()
         for i in range(len(tune_dic)):
             key = [*tune_dic.keys()][i] 
@@ -441,12 +437,12 @@ def next_choice(cur_params=None):
 
 At each iteration of the Simulated Annealing algorith, one combination of hyper-parameters is selected. The XGBoost algorithm is trained with these parameters and the F-score on the validation set is produced. 
 
-* If this F-score is better (larger) than the one at the previous iteration, i.e. there is a "local" improvement, the combination is accepted as the current combination and a neighbouring combination is selected for the next iteration.
-* Otherwise, i.e. if this F-score is worse (smaller) than the one at the previous iteration and the decline is Δf < 0, the combination is accepted as the current one with probability exp(-beta Δf/T) where beta is a constant (here beta = 1.2) and T is the current "temperature". The idea is that we start with a high temperature and "bad" solutions are easily accepted at first, in the hope of exploring wide areas of the search space. But as the temperature drops, bad solutions are less likely to be accepted and the search becomes more focused.      
+* If this F-score is better (larger) than the one at the previous iteration, i.e. there is a "local" improvement, the combination is accepted as the current combination and a neighbouring combination is selected for the next iteration through a call to the next_choice() function.
+* Otherwise, i.e. if this F-score is worse (smaller) than the one at the previous iteration and the decline is Δf < 0, the combination is accepted as the current one with probability exp(-beta Δf/T) where beta is a constant and T is the current "temperature". The idea is that we start with a high temperature and "bad" solutions are easily accepted at first, in the hope of exploring wide areas of the search space. But as the temperature drops, bad solutions are less likely to be accepted and the search becomes more focused.      
 
-The temperature starts at a fixed value T0 and is reduced by a factor of alpha < 1 every n number of iterations. Here T0 = 0.2, n=5 and a = 0.85.   
+The temperature starts at a fixed value T0 and is reduced by a factor of alpha < 1 every n number of iterations. Here T0 = 0.25, n=5 and a = 0.90. The beta constant is 0.8.  
 
-The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.15, 0.10, 0.05, 0.02, 0.01 during the first, second,...,fifth 20 iterations respectively. We set all to 30% and use Solver to find suitable parameters. 
+The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.15, 0.125, 0.1, 0.05 and 0.02 during the first, second,...,fifth 20 iterations respectively. We set all to 50% and use Solver to find suitable parameters. The Excel file can be found **put link**.
 
 A **warning**: if the number of iterations is not suficiently smaller than the total number of combinations, there may be too many  repetitions and delays. The simple approach for producing combinations here does not address such cases.  
 
@@ -457,7 +453,7 @@ import time
 
 t0 = time.clock()
 
-T=0.2
+T=0.40
 best_params = dict() ## initialize dictionary to hold the best parameters
 
 best_f_score = -1. ## initialize best f-score
@@ -468,34 +464,28 @@ for iter in range(maxiter):
     print('\nIteration = {:5d}  T = {:12.6f}'.format(iter,T))
 
     ## find next selection of parameters not visited before
-    ## this is not im
     while True:
-        cur_choice=next_choice(prev_choice) ## first selection or selection - neighbour of prev_choice
+        cur_choice=next_choice(prev_choice) ## first selection or selection-neighbor of prev_choice
         
         ## check if selection has already been visited
         tmp=abs(results.loc[:,[*cur_choice.keys()]] - list(cur_choice.values()))
         tmp=tmp.sum(axis=1)
-        #tmp=results.loc[:,[*cur_choice.keys()]].as_matrix()==cur_choice.values()
-        #tmp=tmp.sum(axis=1)
         if any(tmp==0): ## selection has already been visited
             print('\nCombination revisited - searching again')
         else:
-            break ## break out the while-loop
+            break ## break out of the while-loop
     
     
     ## train the model and obtain f-score on the validation dataset
     f_score,model=do_train(cur_choice, param, dtrain,'train',trainY,dvalid,'valid',validY)
     
-    ## store parameters and results
+    ## store the parameters
     results.loc[iter,[*cur_choice.keys()]]=list(cur_choice.values())
     
-    #if any(results.loc[:iter,].duplicated([*tune_dic.keys()],keep=False)):
-    #    raise Exception('Duplicate!')
-    
-    print('\nF-Score: {:6.2f}  previous: {:6.2f}  best so far: {:6.2f}'.format(f_score, prev_f_score, best_f_score))
+    print('    F-Score: {:6.2f}  previous: {:6.2f}  best so far: {:6.2f}'.format(f_score, prev_f_score, best_f_score))
  
     if f_score > prev_f_score:
-        print('Local improvement')
+        print('    Local improvement')
         
         ## accept this combination as the new starting point
         prev_f_score = f_score
@@ -505,32 +495,32 @@ for iter in range(maxiter):
         if f_score > best_f_score:
             
             best_f_score = f_score
-            print('*** Best f-score updated')
+            print('    Global improvement - best f-score updated')
             for (key,value) in prev_choice.items():
-                print(key,': ',value,' ',end='')
                 best_params[key]=value
 
     else: ## f-score is smaller than the previous one
         
-        print('Worse result')
-        ## this combination as the new starting point with probability exp(-(1.2 x f-score decline)/temperature) 
+        ## accept this combination as the new starting point with probability exp(-(1.6 x f-score decline)/temperature) 
         rnd = random.random()
         diff = f_score-prev_f_score
-        thres=np.exp(1.2*diff/T)
+        thres=np.exp(1.3*diff/T)
         if rnd <= thres:
-            print('\nF-Score decline: {:8.4f}  threshold: {:6.4f}  random number: {:6.4f} -> accepted'.
+            print('    Worse result. F-Score change: {:8.4f}  threshold: {:6.4f}  random number: {:6.4f} -> accepted'.
                   format(diff, thres, rnd))
             prev_f_score = f_score
             prev_choice = cur_choice
  
         else:
-            print('\nF-Score decline: {:8.4f}  threshold: {:6.4f}  random number: {:6.4f} -> rejected'.
+            ## do not update previous f-score and previous choice
+            print('    Worse result. F-Score change: {:8.4f}  threshold: {:6.4f}  random number: {:6.4f} -> rejected'.
                  format(diff, thres, rnd))
+    ## store results
     results.loc[iter,'F-Score']=f_score
     results.loc[iter,'Best F-Score']=best_f_score
-    if iter % 5 == 0: T=0.85*T   
+    if iter % 5 == 0: T=0.85*T  ## reduce temperature every 5 iterations and continue 
         
-print('\n',time.clock() - t0, ' seconds process time\n')    
+print('\n{:6.1f} minutes process time\n'.format((time.clock() - t0)/60))    
 
 print('Best variable parameters found:\n')
 print(best_params)
@@ -538,2129 +528,1136 @@ print(best_params)
 ```
 
     
-    Iteration =     0  T =     0.200000
+    Iteration =     0  T =     0.400000
     Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.2  scale_pos_weight :  50  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  5  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.8  eta :  0.01  subsample :  1.0  
     
-    [0]	train-auc:0.982071	valid-auc:0.934483
-    [9]	train-auc:0.99991	valid-auc:0.974861
+        F-Score:   0.77  previous:  -1.00  best so far:  -1.00
+        Local improvement
+        Global improvement - best f-score updated
     
-    F-Score:   0.77  previous:  -1.00  best so far:  -1.00
-    Local improvement
-    *** Best f-score updated
-    eta :  0.15  subsample :  0.9  gamma :  0.2  scale_pos_weight :  50  max_depth :  10  colsample_bytree :  0.8  
-    Iteration =     1  T =     0.170000
-    selected in next_choice: scale_pos_weight: from  50.00 to  40.00
+    Iteration =     1  T =     0.340000
+    selected move: colsample_bytree: from   0.80 to   0.70
     Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.2  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  5  gamma :  0.15  eta :  0.01  colsample_bytree :  0.7  scale_pos_weight :  40  subsample :  1.0  
     
-    [0]	train-auc:0.981733	valid-auc:0.940463
-    [9]	train-auc:0.999906	valid-auc:0.974748
+        F-Score:   0.81  previous:   0.77  best so far:   0.77
+        Local improvement
+        Global improvement - best f-score updated
     
-    F-Score:   0.78  previous:   0.77  best so far:   0.77
-    Local improvement
-    *** Best f-score updated
-    eta :  0.15  subsample :  0.9  gamma :  0.2  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.8  
-    Iteration =     2  T =     0.170000
-    selected in next_choice: scale_pos_weight: from  40.00 to  50.00
-    
-    Combination revisited - searching again
-    selected in next_choice: gamma     : from   0.20 to   0.15
+    Iteration =     2  T =     0.340000
+    selected move: max_depth : from   5.00 to  10.00
     Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  50  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.7  eta :  0.01  subsample :  1.0  
     
-    [0]	train-auc:0.982071	valid-auc:0.934483
-    [9]	train-auc:0.99991	valid-auc:0.974861
+        F-Score:   0.82  previous:   0.81  best so far:   0.81
+        Local improvement
+        Global improvement - best f-score updated
     
-    F-Score:   0.77  previous:   0.78  best so far:   0.78
-    Worse result
-    
-    F-Score decline:  -0.0064  threshold: 0.9556  random number: 0.9665 -> rejected
-    
-    Iteration =     3  T =     0.170000
-    selected in next_choice: scale_pos_weight: from  50.00 to 300.00
+    Iteration =     3  T =     0.340000
+    selected move: max_depth : from  10.00 to  15.00
     Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  300  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  15  gamma :  0.15  eta :  0.01  colsample_bytree :  0.7  scale_pos_weight :  40  subsample :  1.0  
     
-    [0]	train-auc:0.993044	valid-auc:0.976564
-    [9]	train-auc:0.999913	valid-auc:0.949631
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0906 -> accepted
     
-    F-Score:   0.74  previous:   0.78  best so far:   0.78
-    Worse result
-    
-    F-Score decline:  -0.0366  threshold: 0.7721  random number: 0.4407 -> accepted
-    
-    Iteration =     4  T =     0.170000
-    selected in next_choice: colsample_bytree: from   0.80 to   0.90
+    Iteration =     4  T =     0.340000
+    selected move: scale_pos_weight: from  40.00 to  50.00
     Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  300  max_depth :  10  colsample_bytree :  0.9  
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.7  eta :  0.01  subsample :  1.0  
     
-    [0]	train-auc:0.991818	valid-auc:0.963271
-    [9]	train-auc:0.999907	valid-auc:0.929012
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0349 -> accepted
     
-    F-Score:   0.72  previous:   0.74  best so far:   0.78
-    Worse result
-    
-    F-Score decline:  -0.0214  threshold: 0.8600  random number: 0.0075 -> accepted
-    
-    Iteration =     5  T =     0.170000
-    selected in next_choice: colsample_bytree: from   0.90 to   0.80
-    
-    Combination revisited - searching again
-    selected in next_choice: eta       : from   0.15 to   0.20
+    Iteration =     5  T =     0.340000
+    selected move: subsample : from   1.00 to   0.90
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  300  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  15  gamma :  0.15  eta :  0.01  colsample_bytree :  0.7  scale_pos_weight :  50  subsample :  0.9  
     
-    [0]	train-auc:0.993044	valid-auc:0.976564
-    [9]	train-auc:0.999912	valid-auc:0.946879
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0839 -> accepted
     
-    F-Score:   0.75  previous:   0.72  best so far:   0.78
-    Local improvement
-    
-    Iteration =     6  T =     0.144500
-    selected in next_choice: eta       : from   0.20 to   0.25
+    Iteration =     6  T =     0.289000
+    selected move: eta       : from   0.01 to   0.05
     Parameters:
-    eta :  0.25  subsample :  0.9  gamma :  0.15  scale_pos_weight :  300  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.7  eta :  0.05  subsample :  0.9  
     
-    [0]	train-auc:0.993044	valid-auc:0.976564
-    [9]	train-auc:0.999914	valid-auc:0.960358
+        F-Score:   0.81  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.0044  threshold: 0.9805  random number: 0.2368 -> accepted
     
-    F-Score:   0.77  previous:   0.75  best so far:   0.78
-    Local improvement
-    
-    Iteration =     7  T =     0.144500
-    selected in next_choice: eta       : from   0.25 to   0.20
-    
-    Combination revisited - searching again
-    selected in next_choice: scale_pos_weight: from 300.00 to  50.00
+    Iteration =     7  T =     0.289000
+    selected move: max_depth : from  15.00 to  10.00
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  50  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  10  gamma :  0.15  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  50  subsample :  0.9  
     
-    [0]	train-auc:0.982071	valid-auc:0.934483
-    [9]	train-auc:0.99991	valid-auc:0.973333
+        F-Score:   0.82  previous:   0.81  best so far:   0.82
+        Local improvement
     
-    F-Score:   0.78  previous:   0.77  best so far:   0.78
-    Local improvement
-    *** Best f-score updated
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  50  max_depth :  10  colsample_bytree :  0.8  
-    Iteration =     8  T =     0.144500
-    selected in next_choice: max_depth : from  10.00 to   5.00
+    Iteration =     8  T =     0.289000
+    selected move: max_depth : from  10.00 to   5.00
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.8  
+    max_depth :  5  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.7  eta :  0.05  subsample :  0.9  
     
-    [0]	train-auc:0.946664	valid-auc:0.923623
-    [9]	train-auc:0.989112	valid-auc:0.983706
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Local improvement
+        Global improvement - best f-score updated
     
-    F-Score:   0.77  previous:   0.78  best so far:   0.78
-    Worse result
-    
-    F-Score decline:  -0.0173  threshold: 0.8661  random number: 0.9110 -> rejected
-    
-    Iteration =     9  T =     0.144500
-    selected in next_choice: subsample : from   0.90 to   0.80
+    Iteration =     9  T =     0.289000
+    selected move: scale_pos_weight: from  50.00 to 300.00
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.8  
+    max_depth :  5  gamma :  0.15  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  300  subsample :  0.9  
     
-    [0]	train-auc:0.957383	valid-auc:0.94888
-    [9]	train-auc:0.992577	valid-auc:0.98219
+        F-Score:   0.65  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.1728  threshold: 0.4597  random number: 0.6483 -> rejected
     
-    F-Score:   0.81  previous:   0.78  best so far:   0.78
-    Local improvement
-    *** Best f-score updated
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.8  
-    Iteration =    10  T =     0.144500
-    selected in next_choice: colsample_bytree: from   0.80 to   0.70
+    Iteration =    10  T =     0.289000
+    selected move: colsample_bytree: from   0.70 to   0.60
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.7  
+    max_depth :  5  gamma :  0.15  eta :  0.05  colsample_bytree :  0.6  scale_pos_weight :  50  subsample :  0.9  
     
-    [0]	train-auc:0.957381	valid-auc:0.948879
-    [9]	train-auc:0.989316	valid-auc:0.981458
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.0043  threshold: 0.9807  random number: 0.6158 -> accepted
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.81
-    Local improvement
-    *** Best f-score updated
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.7  
-    Iteration =    11  T =     0.122825
-    selected in next_choice: colsample_bytree: from   0.70 to   0.60
+    Iteration =    11  T =     0.245650
+    selected move: gamma     : from   0.15 to   0.20
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.6  
+    max_depth :  5  gamma :  0.2  scale_pos_weight :  50  colsample_bytree :  0.6  eta :  0.05  subsample :  0.9  
     
-    [0]	train-auc:0.957356	valid-auc:0.948817
-    [9]	train-auc:0.989536	valid-auc:0.978118
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0913 -> accepted
     
-    F-Score:   0.83  previous:   0.82  best so far:   0.82
-    Local improvement
-    *** Best f-score updated
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.6  
-    Iteration =    12  T =     0.122825
-    selected in next_choice: subsample : from   0.80 to   0.90
+    Iteration =    12  T =     0.245650
+    selected move: subsample : from   0.90 to   0.80
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.6  
+    max_depth :  5  gamma :  0.2  eta :  0.05  colsample_bytree :  0.6  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.946661	valid-auc:0.923778
-    [9]	train-auc:0.989222	valid-auc:0.978827
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Local improvement
+        Global improvement - best f-score updated
     
-    F-Score:   0.80  previous:   0.83  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0331  threshold: 0.7239  random number: 0.9393 -> rejected
-    
-    Iteration =    13  T =     0.122825
-    selected in next_choice: scale_pos_weight: from  50.00 to  40.00
+    Iteration =    13  T =     0.245650
+    selected move: max_depth : from   5.00 to  10.00
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.2  scale_pos_weight :  50  colsample_bytree :  0.6  eta :  0.05  subsample :  0.8  
     
-    [0]	train-auc:0.946118	valid-auc:0.943968
-    [9]	train-auc:0.989917	valid-auc:0.983616
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.0086  threshold: 0.9553  random number: 0.8453 -> accepted
     
-    F-Score:   0.82  previous:   0.83  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0134  threshold: 0.8771  random number: 0.5822 -> accepted
-    
-    Iteration =    14  T =     0.122825
-    selected in next_choice: max_depth : from   5.00 to  10.00
+    Iteration =    14  T =     0.245650
+    selected move: eta       : from   0.05 to   0.10
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.2  eta :  0.1  colsample_bytree :  0.6  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.9726	valid-auc:0.931686
-    [9]	train-auc:0.999963	valid-auc:0.9647
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Local improvement
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Local improvement
-    
-    Iteration =    15  T =     0.122825
-    selected in next_choice: colsample_bytree: from   0.60 to   0.70
+    Iteration =    15  T =     0.245650
+    selected move: colsample_bytree: from   0.60 to   0.50
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.7  
+    max_depth :  10  gamma :  0.2  scale_pos_weight :  50  colsample_bytree :  0.5  eta :  0.1  subsample :  0.8  
     
-    [0]	train-auc:0.972601	valid-auc:0.931571
-    [9]	train-auc:0.999955	valid-auc:0.965948
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.0013  threshold: 0.9930  random number: 0.8805 -> accepted
     
-    F-Score:   0.79  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0325  threshold: 0.7279  random number: 0.6716 -> accepted
-    
-    Iteration =    16  T =     0.104401
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
+    Iteration =    16  T =     0.208803
+    selected move: gamma     : from   0.20 to   0.15
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.7  
+    max_depth :  10  gamma :  0.15  eta :  0.1  colsample_bytree :  0.5  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.967464	valid-auc:0.938166
-    [9]	train-auc:0.999975	valid-auc:0.964927
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0646 -> accepted
     
-    F-Score:   0.80  previous:   0.79  best so far:   0.83
-    Local improvement
+    Iteration =    17  T =     0.208803
+    selected move: scale_pos_weight: from  50.00 to  40.00
+    Parameters:
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.5  eta :  0.1  subsample :  0.8  
     
-    Iteration =    17  T =     0.104401
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
+        F-Score:   0.81  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.0061  threshold: 0.9628  random number: 0.9123 -> accepted
+    
+    Iteration =    18  T =     0.208803
+    selected move: max_depth : from  10.00 to   5.00
+    Parameters:
+    max_depth :  5  gamma :  0.15  eta :  0.1  colsample_bytree :  0.5  scale_pos_weight :  40  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.81  best so far:   0.82
+        Local improvement
+    
+    Iteration =    19  T =     0.208803
+    selected move: scale_pos_weight: from  40.00 to  30.00
+    Parameters:
+    max_depth :  5  gamma :  0.15  scale_pos_weight :  30  colsample_bytree :  0.5  eta :  0.1  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.82
+        Worse result. F-Score change:  -0.0057  threshold: 0.9652  random number: 0.6751 -> accepted
+    
+    Iteration =    20  T =     0.208803
+    selected move: eta       : from   0.10 to   0.05
+    Parameters:
+    max_depth :  5  gamma :  0.15  eta :  0.05  colsample_bytree :  0.5  scale_pos_weight :  30  subsample :  0.8  
+    
+        F-Score:   0.83  previous:   0.82  best so far:   0.82
+        Local improvement
+        Global improvement - best f-score updated
+    
+    Iteration =    21  T =     0.177482
+    selected move: scale_pos_weight: from  30.00 to  40.00
+    Parameters:
+    max_depth :  5  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.5  eta :  0.05  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:  -0.0043  threshold: 0.9687  random number: 0.0460 -> accepted
+    
+    Iteration =    22  T =     0.177482
+    selected move: eta       : from   0.05 to   0.10
     
     Combination revisited - searching again
-    selected in next_choice: colsample_bytree: from   0.70 to   0.60
+    selected move: max_depth : from   5.00 to  10.00
+    Parameters:
+    max_depth :  10  gamma :  0.15  eta :  0.05  colsample_bytree :  0.5  scale_pos_weight :  40  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0074  threshold: 0.9472  random number: 0.6446 -> accepted
+    
+    Iteration =    23  T =     0.177482
+    selected move: colsample_bytree: from   0.50 to   0.60
+    Parameters:
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.6  eta :  0.05  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
+    
+    Iteration =    24  T =     0.177482
+    selected move: scale_pos_weight: from  40.00 to  30.00
+    Parameters:
+    max_depth :  10  gamma :  0.15  eta :  0.05  colsample_bytree :  0.6  scale_pos_weight :  30  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.2665 -> accepted
+    
+    Iteration =    25  T =     0.177482
+    selected move: subsample : from   0.80 to   0.70
+    Parameters:
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  30  colsample_bytree :  0.6  eta :  0.05  subsample :  0.7  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Local improvement
+    
+    Iteration =    26  T =     0.150860
+    selected move: gamma     : from   0.15 to   0.20
+    Parameters:
+    max_depth :  10  gamma :  0.2  eta :  0.05  colsample_bytree :  0.6  scale_pos_weight :  30  subsample :  0.7  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.4534 -> accepted
+    
+    Iteration =    27  T =     0.150860
+    selected move: scale_pos_weight: from  30.00 to  40.00
+    Parameters:
+    max_depth :  10  gamma :  0.2  scale_pos_weight :  40  colsample_bytree :  0.6  eta :  0.05  subsample :  0.7  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.6654 -> accepted
+    
+    Iteration =    28  T =     0.150860
+    selected move: eta       : from   0.05 to   0.01
+    Parameters:
+    max_depth :  10  gamma :  0.2  eta :  0.01  colsample_bytree :  0.6  scale_pos_weight :  40  subsample :  0.7  
+    
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0044  threshold: 0.9630  random number: 0.0706 -> accepted
+    
+    Iteration =    29  T =     0.150860
+    selected move: eta       : from   0.01 to   0.05
     
     Combination revisited - searching again
-    selected in next_choice: gamma     : from   0.15 to   0.10
+    selected move: gamma     : from   0.20 to   0.15
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.6  eta :  0.01  subsample :  0.7  
     
-    [0]	train-auc:0.9726	valid-auc:0.931686
-    [9]	train-auc:0.999963	valid-auc:0.9647
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.7100 -> accepted
     
-    F-Score:   0.82  previous:   0.80  best so far:   0.83
-    Local improvement
-    
-    Iteration =    18  T =     0.104401
-    selected in next_choice: eta       : from   0.20 to   0.15
+    Iteration =    30  T =     0.150860
+    selected move: subsample : from   0.70 to   0.80
     Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.15  eta :  0.01  colsample_bytree :  0.6  scale_pos_weight :  40  subsample :  0.8  
     
-    [0]	train-auc:0.9726	valid-auc:0.931686
-    [9]	train-auc:0.999854	valid-auc:0.968506
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:  -0.0030  threshold: 0.9744  random number: 0.3773 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.0839 -> accepted
-    
-    Iteration =    19  T =     0.104401
-    selected in next_choice: eta       : from   0.15 to   0.10
+    Iteration =    31  T =     0.128231
+    selected move: max_depth : from  10.00 to  15.00
     Parameters:
-    eta :  0.1  subsample :  0.9  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.6  eta :  0.01  subsample :  0.8  
     
-    [0]	train-auc:0.9726	valid-auc:0.931686
-    [9]	train-auc:0.99971	valid-auc:0.964972
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.81  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0087  threshold: 0.9049  random number: 0.7665 -> accepted
-    
-    Iteration =    20  T =     0.104401
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
-    Parameters:
-    eta :  0.1  subsample :  0.9  gamma :  0.1  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.967447	valid-auc:0.934786
-    [9]	train-auc:0.999571	valid-auc:0.971973
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    21  T =     0.088741
-    selected in next_choice: subsample : from   0.90 to   0.80
-    Parameters:
-    eta :  0.1  subsample :  0.8  gamma :  0.1  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.969693	valid-auc:0.944939
-    [9]	train-auc:0.999879	valid-auc:0.978308
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    22  T =     0.088741
-    selected in next_choice: gamma     : from   0.10 to   0.05
-    Parameters:
-    eta :  0.1  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.969693	valid-auc:0.944939
-    [9]	train-auc:0.999879	valid-auc:0.978308
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.2368 -> accepted
-    
-    Iteration =    23  T =     0.088741
-    selected in next_choice: subsample : from   0.80 to   0.90
-    Parameters:
-    eta :  0.1  subsample :  0.9  gamma :  0.05  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.967447	valid-auc:0.934786
-    [9]	train-auc:0.999567	valid-auc:0.971452
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0027  threshold: 0.9638  random number: 0.0308 -> accepted
-    
-    Iteration =    24  T =     0.088741
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
-    Parameters:
-    eta :  0.1  subsample :  0.9  gamma :  0.05  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.9726	valid-auc:0.931686
-    [9]	train-auc:0.999704	valid-auc:0.965264
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0002  threshold: 0.9979  random number: 0.7888 -> accepted
-    
-    Iteration =    25  T =     0.088741
-    selected in next_choice: gamma     : from   0.05 to   0.10
+    Iteration =    32  T =     0.128231
+    selected move: max_depth : from  15.00 to  10.00
     
     Combination revisited - searching again
-    selected in next_choice: subsample : from   0.90 to   0.80
+    selected move: scale_pos_weight: from  40.00 to  50.00
     Parameters:
-    eta :  0.1  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
+    max_depth :  15  gamma :  0.15  eta :  0.01  colsample_bytree :  0.6  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.985898	valid-auc:0.953568
-    [9]	train-auc:0.999905	valid-auc:0.969679
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0014  threshold: 0.9863  random number: 0.4966 -> accepted
     
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    26  T =     0.075430
-    selected in next_choice: eta       : from   0.10 to   0.15
+    Iteration =    33  T =     0.128231
+    selected move: max_depth : from  15.00 to  10.00
     Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.6  eta :  0.01  subsample :  0.8  
     
-    [0]	train-auc:0.985898	valid-auc:0.953568
-    [9]	train-auc:0.999916	valid-auc:0.970392
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    27  T =     0.075430
-    selected in next_choice: max_depth : from  10.00 to  15.00
+    Iteration =    34  T =     0.128231
+    selected move: eta       : from   0.01 to   0.05
     Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.15  eta :  0.05  colsample_bytree :  0.6  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.982413	valid-auc:0.930599
-    [9]	train-auc:0.999919	valid-auc:0.969938
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0030  threshold: 0.9699  random number: 0.2151 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0043  threshold: 0.9339  random number: 0.3461 -> accepted
-    
-    Iteration =    28  T =     0.075430
-    selected in next_choice: eta       : from   0.15 to   0.20
+    Iteration =    35  T =     0.128231
+    selected move: max_depth : from  10.00 to  15.00
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.6  eta :  0.05  subsample :  0.8  
     
-    [0]	train-auc:0.982413	valid-auc:0.930599
-    [9]	train-auc:0.999938	valid-auc:0.961945
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0044  threshold: 0.9567  random number: 0.9373 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Local improvement
-    
-    Iteration =    29  T =     0.075430
-    selected in next_choice: scale_pos_weight: from  40.00 to  50.00
+    Iteration =    36  T =     0.108996
+    selected move: max_depth : from  15.00 to  20.00
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  50  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  20  gamma :  0.15  eta :  0.05  colsample_bytree :  0.6  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.982401	valid-auc:0.930592
-    [9]	train-auc:0.999917	valid-auc:0.964394
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.9569 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0056  threshold: 0.9150  random number: 0.6233 -> accepted
-    
-    Iteration =    30  T =     0.075430
-    selected in next_choice: eta       : from   0.20 to   0.15
+    Iteration =    37  T =     0.108996
+    selected move: gamma     : from   0.15 to   0.20
     Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  50  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  20  gamma :  0.2  scale_pos_weight :  50  colsample_bytree :  0.6  eta :  0.05  subsample :  0.8  
     
-    [0]	train-auc:0.982401	valid-auc:0.930592
-    [9]	train-auc:0.999919	valid-auc:0.96392
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.6705 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Local improvement
-    
-    Iteration =    31  T =     0.064115
-    selected in next_choice: scale_pos_weight: from  50.00 to 300.00
+    Iteration =    38  T =     0.108996
+    selected move: colsample_bytree: from   0.60 to   0.70
     Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  300  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  20  gamma :  0.2  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  50  subsample :  0.8  
     
-    [0]	train-auc:0.993286	valid-auc:0.979525
-    [9]	train-auc:0.999926	valid-auc:0.979007
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.81  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0190  threshold: 0.7013  random number: 0.6158 -> accepted
-    
-    Iteration =    32  T =     0.064115
-    selected in next_choice: colsample_bytree: from   0.60 to   0.70
+    Iteration =    39  T =     0.108996
+    selected move: max_depth : from  20.00 to  15.00
     Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  300  max_depth :  15  colsample_bytree :  0.7  
+    max_depth :  15  gamma :  0.2  scale_pos_weight :  50  colsample_bytree :  0.7  eta :  0.05  subsample :  0.8  
     
-    [0]	train-auc:0.993451	valid-auc:0.978103
-    [9]	train-auc:0.999918	valid-auc:0.978845
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.4163 -> accepted
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    33  T =     0.064115
-    selected in next_choice: subsample : from   0.80 to   0.70
+    Iteration =    40  T =     0.108996
+    selected move: subsample : from   0.80 to   0.90
     Parameters:
-    eta :  0.15  subsample :  0.7  gamma :  0.1  scale_pos_weight :  300  max_depth :  15  colsample_bytree :  0.7  
+    max_depth :  15  gamma :  0.2  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  50  subsample :  0.9  
     
-    [0]	train-auc:0.982521	valid-auc:0.976107
-    [9]	train-auc:0.99991	valid-auc:0.977231
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0044  threshold: 0.9492  random number: 0.8065 -> accepted
     
-    F-Score:   0.81  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0145  threshold: 0.7617  random number: 0.1486 -> accepted
-    
-    Iteration =    34  T =     0.064115
-    selected in next_choice: scale_pos_weight: from 300.00 to 400.00
-    Parameters:
-    eta :  0.15  subsample :  0.7  gamma :  0.1  scale_pos_weight :  400  max_depth :  15  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.98279	valid-auc:0.976332
-    [9]	train-auc:0.999923	valid-auc:0.980894
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    35  T =     0.064115
-    selected in next_choice: eta       : from   0.15 to   0.10
-    Parameters:
-    eta :  0.1  subsample :  0.7  gamma :  0.1  scale_pos_weight :  400  max_depth :  15  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.98279	valid-auc:0.976332
-    [9]	train-auc:0.99991	valid-auc:0.97903
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    36  T =     0.054498
-    selected in next_choice: eta       : from   0.10 to   0.15
+    Iteration =    41  T =     0.092647
+    selected move: gamma     : from   0.20 to   0.15
     
     Combination revisited - searching again
-    selected in next_choice: eta       : from   0.15 to   0.20
+    selected move: scale_pos_weight: from  50.00 to 300.00
     Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  400  max_depth :  15  colsample_bytree :  0.7  
+    max_depth :  15  gamma :  0.2  scale_pos_weight :  300  colsample_bytree :  0.7  eta :  0.05  subsample :  0.9  
     
-    [0]	train-auc:0.98279	valid-auc:0.976332
-    [9]	train-auc:0.999909	valid-auc:0.969513
+        F-Score:   0.83  previous:   0.81  best so far:   0.83
+        Local improvement
+        Global improvement - best f-score updated
     
-    F-Score:   0.80  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0103  threshold: 0.7977  random number: 0.1831 -> accepted
-    
-    Iteration =    37  T =     0.054498
-    selected in next_choice: max_depth : from  15.00 to  10.00
+    Iteration =    42  T =     0.092647
+    selected move: gamma     : from   0.20 to   0.15
     Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  400  max_depth :  10  colsample_bytree :  0.7  
+    max_depth :  15  gamma :  0.15  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  300  subsample :  0.9  
     
-    [0]	train-auc:0.982772	valid-auc:0.976302
-    [9]	train-auc:0.999908	valid-auc:0.960039
+        F-Score:   0.83  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.3003 -> accepted
     
-    F-Score:   0.76  previous:   0.80  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0469  threshold: 0.3560  random number: 0.1144 -> accepted
-    
-    Iteration =    38  T =     0.054498
-    selected in next_choice: max_depth : from  10.00 to   5.00
-    Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  400  max_depth :  5  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.981663	valid-auc:0.975719
-    [9]	train-auc:0.999729	valid-auc:0.976098
-    
-    F-Score:   0.51  previous:   0.76  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.2508  threshold: 0.0040  random number: 0.0146 -> rejected
-    
-    Iteration =    39  T =     0.054498
-    selected in next_choice: subsample : from   0.70 to   0.80
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  400  max_depth :  5  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.976032	valid-auc:0.899881
-    [9]	train-auc:0.999577	valid-auc:0.972076
-    
-    F-Score:   0.48  previous:   0.76  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.2751  threshold: 0.0023  random number: 0.4868 -> rejected
-    
-    Iteration =    40  T =     0.054498
-    selected in next_choice: max_depth : from   5.00 to  10.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  400  max_depth :  10  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.993238	valid-auc:0.974637
-    [9]	train-auc:0.999915	valid-auc:0.950112
-    
-    F-Score:   0.78  previous:   0.76  best so far:   0.83
-    Local improvement
-    
-    Iteration =    41  T =     0.046323
-    selected in next_choice: max_depth : from  10.00 to   5.00
+    Iteration =    43  T =     0.092647
+    selected move: gamma     : from   0.15 to   0.20
     
     Combination revisited - searching again
-    selected in next_choice: subsample : from   0.80 to   0.90
+    selected move: colsample_bytree: from   0.70 to   0.80
     Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.1  scale_pos_weight :  400  max_depth :  5  colsample_bytree :  0.7  
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  300  colsample_bytree :  0.8  eta :  0.05  subsample :  0.9  
     
-    [0]	train-auc:0.98214	valid-auc:0.901795
-    [9]	train-auc:0.999761	valid-auc:0.980874
+        F-Score:   0.82  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:  -0.0106  threshold: 0.8613  random number: 0.0411 -> accepted
     
-    F-Score:   0.50  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.2770  threshold: 0.0008  random number: 0.9649 -> rejected
-    
-    Iteration =    42  T =     0.046323
-    selected in next_choice: gamma     : from   0.10 to   0.15
-    Parameters:
-    eta :  0.2  subsample :  0.9  gamma :  0.15  scale_pos_weight :  400  max_depth :  5  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.98214	valid-auc:0.901795
-    [9]	train-auc:0.999761	valid-auc:0.980874
-    
-    F-Score:   0.50  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.2770  threshold: 0.0008  random number: 0.0646 -> rejected
-    
-    Iteration =    43  T =     0.046323
-    selected in next_choice: eta       : from   0.20 to   0.15
-    Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  400  max_depth :  5  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.98214	valid-auc:0.901795
-    [9]	train-auc:0.999539	valid-auc:0.976451
-    
-    F-Score:   0.44  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.3355  threshold: 0.0002  random number: 0.5411 -> rejected
-    
-    Iteration =    44  T =     0.046323
-    selected in next_choice: scale_pos_weight: from 400.00 to 300.00
-    Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  300  max_depth :  5  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.982763	valid-auc:0.924169
-    [9]	train-auc:0.999349	valid-auc:0.979659
-    
-    F-Score:   0.61  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.1668  threshold: 0.0133  random number: 0.4659 -> rejected
-    
-    Iteration =    45  T =     0.046323
-    selected in next_choice: colsample_bytree: from   0.70 to   0.80
-    Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  300  max_depth :  5  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.980586	valid-auc:0.90959
-    [9]	train-auc:0.999699	valid-auc:0.965681
-    
-    F-Score:   0.66  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.1141  threshold: 0.0520  random number: 0.6015 -> rejected
-    
-    Iteration =    46  T =     0.039375
-    selected in next_choice: scale_pos_weight: from 300.00 to  50.00
-    Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.946664	valid-auc:0.923623
-    [9]	train-auc:0.988132	valid-auc:0.98001
-    
-    F-Score:   0.77  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0119  threshold: 0.6953  random number: 0.0889 -> accepted
-    
-    Iteration =    47  T =     0.039375
-    selected in next_choice: max_depth : from   5.00 to  10.00
+    Iteration =    44  T =     0.092647
+    selected move: colsample_bytree: from   0.80 to   0.70
     
     Combination revisited - searching again
-    selected in next_choice: subsample : from   0.90 to   1.00
+    selected move: eta       : from   0.05 to   0.01
     Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.15  scale_pos_weight :  50  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  15  gamma :  0.15  eta :  0.01  colsample_bytree :  0.8  scale_pos_weight :  300  subsample :  0.9  
     
-    [0]	train-auc:0.979527	valid-auc:0.940509
-    [9]	train-auc:0.999695	valid-auc:0.969905
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0075  threshold: 0.8999  random number: 0.4959 -> accepted
     
-    F-Score:   0.76  previous:   0.77  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0058  threshold: 0.8385  random number: 0.5790 -> accepted
-    
-    Iteration =    48  T =     0.039375
-    selected in next_choice: max_depth : from  10.00 to  15.00
+    Iteration =    45  T =     0.092647
+    selected move: scale_pos_weight: from 300.00 to  50.00
     Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.15  scale_pos_weight :  50  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.8  eta :  0.01  subsample :  0.9  
     
-    [0]	train-auc:0.999565	valid-auc:0.960823
-    [9]	train-auc:0.999912	valid-auc:0.958344
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.75  previous:   0.76  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0076  threshold: 0.7922  random number: 0.2696 -> accepted
-    
-    Iteration =    49  T =     0.039375
-    selected in next_choice: max_depth : from  15.00 to  10.00
+    Iteration =    46  T =     0.078750
+    selected move: colsample_bytree: from   0.80 to   0.70
     
     Combination revisited - searching again
-    selected in next_choice: scale_pos_weight: from  50.00 to  40.00
-    Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.15  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.97953	valid-auc:0.933839
-    [9]	train-auc:0.999645	valid-auc:0.964187
-    
-    F-Score:   0.76  previous:   0.75  best so far:   0.83
-    Local improvement
-    
-    Iteration =    50  T =     0.039375
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
-    Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.15  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.979543	valid-auc:0.933969
-    [9]	train-auc:0.999768	valid-auc:0.973134
-    
-    F-Score:   0.77  previous:   0.76  best so far:   0.83
-    Local improvement
-    
-    Iteration =    51  T =     0.033469
-    selected in next_choice: gamma     : from   0.15 to   0.20
-    Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.2  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.979543	valid-auc:0.933969
-    [9]	train-auc:0.999768	valid-auc:0.973134
-    
-    F-Score:   0.77  previous:   0.77  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.5564 -> accepted
-    
-    Iteration =    52  T =     0.033469
-    selected in next_choice: colsample_bytree: from   0.80 to   0.70
-    Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.2  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.988122	valid-auc:0.932805
-    [9]	train-auc:0.999955	valid-auc:0.966969
-    
-    F-Score:   0.78  previous:   0.77  best so far:   0.83
-    Local improvement
-    
-    Iteration =    53  T =     0.033469
-    selected in next_choice: gamma     : from   0.20 to   0.15
-    Parameters:
-    eta :  0.15  subsample :  1.0  gamma :  0.15  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.988122	valid-auc:0.932805
-    [9]	train-auc:0.999955	valid-auc:0.966968
-    
-    F-Score:   0.78  previous:   0.78  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.6446 -> accepted
-    
-    Iteration =    54  T =     0.033469
-    selected in next_choice: subsample : from   1.00 to   0.90
-    Parameters:
-    eta :  0.15  subsample :  0.9  gamma :  0.15  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.967464	valid-auc:0.938166
-    [9]	train-auc:0.99942	valid-auc:0.964276
-    
-    F-Score:   0.80  previous:   0.78  best so far:   0.83
-    Local improvement
-    
-    Iteration =    55  T =     0.033469
-    selected in next_choice: subsample : from   0.90 to   0.80
-    Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.15  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.969599	valid-auc:0.937706
-    [9]	train-auc:0.999839	valid-auc:0.974833
-    
-    F-Score:   0.81  previous:   0.80  best so far:   0.83
-    Local improvement
-    
-    Iteration =    56  T =     0.028448
-    selected in next_choice: colsample_bytree: from   0.70 to   0.60
-    Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.15  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.969693	valid-auc:0.944939
-    [9]	train-auc:0.999907	valid-auc:0.9767
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    57  T =     0.028448
-    selected in next_choice: gamma     : from   0.15 to   0.10
-    Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.969693	valid-auc:0.944939
-    [9]	train-auc:0.999907	valid-auc:0.9767
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.4810 -> accepted
-    
-    Iteration =    58  T =     0.028448
-    selected in next_choice: max_depth : from  10.00 to   5.00
-    Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.1  scale_pos_weight :  30  max_depth :  5  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.94184	valid-auc:0.934135
-    [9]	train-auc:0.974279	valid-auc:0.955128
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    59  T =     0.028448
-    selected in next_choice: gamma     : from   0.10 to   0.05
-    Parameters:
-    eta :  0.15  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  5  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.94184	valid-auc:0.934135
-    [9]	train-auc:0.974283	valid-auc:0.955139
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.3552 -> accepted
-    
-    Iteration =    60  T =     0.028448
-    selected in next_choice: eta       : from   0.15 to   0.20
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  5  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.94184	valid-auc:0.934135
-    [9]	train-auc:0.988248	valid-auc:0.97642
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    61  T =     0.024181
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.957183	valid-auc:0.948786
-    [9]	train-auc:0.984963	valid-auc:0.975702
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0031  threshold: 0.8575  random number: 0.2492 -> accepted
-    
-    Iteration =    62  T =     0.024181
-    selected in next_choice: gamma     : from   0.05 to   0.10
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.957183	valid-auc:0.948786
-    [9]	train-auc:0.984963	valid-auc:0.975702
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.9335 -> accepted
-    
-    Iteration =    63  T =     0.024181
-    selected in next_choice: max_depth : from   5.00 to  10.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.985898	valid-auc:0.953568
-    [9]	train-auc:0.999937	valid-auc:0.953897
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0012  threshold: 0.9444  random number: 0.4534 -> accepted
-    
-    Iteration =    64  T =     0.024181
-    selected in next_choice: gamma     : from   0.10 to   0.05
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.985898	valid-auc:0.953568
-    [9]	train-auc:0.999937	valid-auc:0.953897
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.5302 -> accepted
-    
-    Iteration =    65  T =     0.024181
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.6  
-    
-    [0]	train-auc:0.969693	valid-auc:0.944939
-    [9]	train-auc:0.999969	valid-auc:0.975821
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0029  threshold: 0.8663  random number: 0.0193 -> accepted
-    
-    Iteration =    66  T =     0.020554
-    selected in next_choice: colsample_bytree: from   0.60 to   0.70
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.969599	valid-auc:0.937706
-    [9]	train-auc:0.999965	valid-auc:0.980782
-    
-    F-Score:   0.80  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0043  threshold: 0.7768  random number: 0.5081 -> accepted
-    
-    Iteration =    67  T =     0.020554
-    selected in next_choice: max_depth : from  10.00 to   5.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  5  colsample_bytree :  0.7  
-    
-    [0]	train-auc:0.941746	valid-auc:0.93411
-    [9]	train-auc:0.984556	valid-auc:0.967545
-    
-    F-Score:   0.79  previous:   0.80  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0124  threshold: 0.4837  random number: 0.0058 -> accepted
-    
-    Iteration =    68  T =     0.020554
-    selected in next_choice: colsample_bytree: from   0.70 to   0.80
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  5  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.941746	valid-auc:0.93411
-    [9]	train-auc:0.991635	valid-auc:0.982195
-    
-    F-Score:   0.81  previous:   0.79  best so far:   0.83
-    Local improvement
-    
-    Iteration =    69  T =     0.020554
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.956901	valid-auc:0.948084
-    [9]	train-auc:0.989147	valid-auc:0.983087
-    
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0016  threshold: 0.9129  random number: 0.1438 -> accepted
-    
-    Iteration =    70  T =     0.020554
-    selected in next_choice: max_depth : from   5.00 to  10.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.982146	valid-auc:0.936521
-    [9]	train-auc:0.999957	valid-auc:0.966623
-    
-    F-Score:   0.80  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0072  threshold: 0.6571  random number: 0.4728 -> accepted
-    
-    Iteration =    71  T =     0.017471
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.05  scale_pos_weight :  30  max_depth :  10  colsample_bytree :  0.8  
-    
-    [0]	train-auc:0.969599	valid-auc:0.937706
-    [9]	train-auc:0.99995	valid-auc:0.973748
-    
-    F-Score:   0.79  previous:   0.80  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0125  threshold: 0.4229  random number: 0.3773 -> accepted
-    
-    Iteration =    72  T =     0.017471
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
+    selected move: colsample_bytree: from   0.70 to   0.80
     
     Combination revisited - searching again
-    selected in next_choice: gamma     : from   0.05 to   0.10
+    selected move: max_depth : from  15.00 to  20.00
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.8  
+    max_depth :  20  gamma :  0.15  eta :  0.01  colsample_bytree :  0.8  scale_pos_weight :  50  subsample :  0.9  
     
-    [0]	train-auc:0.982146	valid-auc:0.936521
-    [9]	train-auc:0.999957	valid-auc:0.966623
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.7829 -> accepted
     
-    F-Score:   0.80  previous:   0.79  best so far:   0.83
-    Local improvement
-    
-    Iteration =    73  T =     0.017471
-    selected in next_choice: max_depth : from  10.00 to   5.00
+    Iteration =    47  T =     0.078750
+    selected move: colsample_bytree: from   0.80 to   0.90
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.8  
+    max_depth :  20  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.9  eta :  0.01  subsample :  0.9  
     
-    [0]	train-auc:0.956901	valid-auc:0.948084
-    [9]	train-auc:0.989147	valid-auc:0.983087
+        F-Score:   0.80  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0205  threshold: 0.7133  random number: 0.8702 -> rejected
     
-    F-Score:   0.81  previous:   0.80  best so far:   0.83
-    Local improvement
-    
-    Iteration =    74  T =     0.017471
-    selected in next_choice: subsample : from   0.80 to   0.70
+    Iteration =    48  T =     0.078750
+    selected move: eta       : from   0.01 to   0.05
     Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.8  
+    max_depth :  20  gamma :  0.15  scale_pos_weight :  50  colsample_bytree :  0.8  eta :  0.05  subsample :  0.9  
     
-    [0]	train-auc:0.957335	valid-auc:0.948866
-    [9]	train-auc:0.992334	valid-auc:0.976264
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.8816 -> accepted
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    75  T =     0.017471
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
+    Iteration =    49  T =     0.078750
+    selected move: colsample_bytree: from   0.80 to   0.70
     Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  30  max_depth :  5  colsample_bytree :  0.8  
+    max_depth :  20  gamma :  0.15  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  50  subsample :  0.9  
     
-    [0]	train-auc:0.941835	valid-auc:0.934143
-    [9]	train-auc:0.988599	valid-auc:0.975537
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0100  threshold: 0.8478  random number: 0.7335 -> accepted
     
-    F-Score:   0.83  previous:   0.82  best so far:   0.83
-    Local improvement
+    Iteration =    50  T =     0.078750
+    selected move: scale_pos_weight: from  50.00 to 300.00
+    Parameters:
+    max_depth :  20  gamma :  0.15  scale_pos_weight :  300  colsample_bytree :  0.7  eta :  0.05  subsample :  0.9  
     
-    Iteration =    76  T =     0.014850
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
+        F-Score:   0.83  previous:   0.81  best so far:   0.83
+        Local improvement
+    
+    Iteration =    51  T =     0.066937
+    selected move: colsample_bytree: from   0.70 to   0.80
+    Parameters:
+    max_depth :  20  gamma :  0.15  eta :  0.05  colsample_bytree :  0.8  scale_pos_weight :  300  subsample :  0.9  
+    
+        F-Score:   0.82  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:  -0.0075  threshold: 0.8641  random number: 0.2957 -> accepted
+    
+    Iteration =    52  T =     0.066937
+    selected move: max_depth : from  20.00 to  25.00
+    Parameters:
+    max_depth :  25  gamma :  0.15  scale_pos_weight :  300  colsample_bytree :  0.8  eta :  0.05  subsample :  0.9  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.7777 -> accepted
+    
+    Iteration =    53  T =     0.066937
+    selected move: colsample_bytree: from   0.80 to   0.70
+    Parameters:
+    max_depth :  25  gamma :  0.15  eta :  0.05  colsample_bytree :  0.7  scale_pos_weight :  300  subsample :  0.9  
+    
+        F-Score:   0.83  previous:   0.82  best so far:   0.83
+        Local improvement
+    
+    Iteration =    54  T =     0.066937
+    selected move: colsample_bytree: from   0.70 to   0.80
     
     Combination revisited - searching again
-    selected in next_choice: colsample_bytree: from   0.80 to   0.90
-    Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  40  max_depth :  5  colsample_bytree :  0.9  
-    
-    [0]	train-auc:0.937844	valid-auc:0.931795
-    [9]	train-auc:0.989042	valid-auc:0.976264
-    
-    F-Score:   0.81  previous:   0.83  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0143  threshold: 0.3153  random number: 0.0542 -> accepted
-    
-    Iteration =    77  T =     0.014850
-    selected in next_choice: max_depth : from   5.00 to  10.00
-    Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  40  max_depth :  10  colsample_bytree :  0.9  
-    
-    [0]	train-auc:0.97994	valid-auc:0.966859
-    [9]	train-auc:0.999958	valid-auc:0.968255
-    
-    F-Score:   0.80  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0129  threshold: 0.3535  random number: 0.5875 -> rejected
-    
-    Iteration =    78  T =     0.014850
-    selected in next_choice: max_depth : from  10.00 to  15.00
-    Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  40  max_depth :  15  colsample_bytree :  0.9  
-    
-    [0]	train-auc:0.980877	valid-auc:0.969225
-    [9]	train-auc:0.999959	valid-auc:0.969989
-    
-    F-Score:   0.80  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0185  threshold: 0.2241  random number: 0.1640 -> accepted
-    
-    Iteration =    79  T =     0.014850
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
-    Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.9  
-    
-    [0]	train-auc:0.980879	valid-auc:0.96929
-    [9]	train-auc:0.999969	valid-auc:0.962677
-    
-    F-Score:   0.79  previous:   0.80  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0056  threshold: 0.6378  random number: 0.5573 -> accepted
-    
-    Iteration =    80  T =     0.014850
-    selected in next_choice: subsample : from   0.70 to   0.80
-    Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.1  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.9  
-    
-    [0]	train-auc:0.982268	valid-auc:0.944617
-    [9]	train-auc:0.999951	valid-auc:0.947622
-    
-    F-Score:   0.78  previous:   0.79  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0124  threshold: 0.3662  random number: 0.1442 -> accepted
-    
-    Iteration =    81  T =     0.012623
-    selected in next_choice: subsample : from   0.80 to   0.70
+    selected move: max_depth : from  25.00 to  20.00
     
     Combination revisited - searching again
-    selected in next_choice: colsample_bytree: from   0.90 to   0.80
+    selected move: eta       : from   0.05 to   0.10
     Parameters:
-    eta :  0.2  subsample :  0.7  gamma :  0.1  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.15  scale_pos_weight :  300  colsample_bytree :  0.7  eta :  0.1  subsample :  0.9  
     
-    [0]	train-auc:0.980951	valid-auc:0.964096
-    [9]	train-auc:0.999955	valid-auc:0.967532
+        F-Score:   0.82  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:  -0.0044  threshold: 0.9176  random number: 0.1031 -> accepted
     
-    F-Score:   0.81  previous:   0.78  best so far:   0.83
-    Local improvement
-    
-    Iteration =    82  T =     0.012623
-    selected in next_choice: eta       : from   0.20 to   0.25
+    Iteration =    55  T =     0.066937
+    selected move: colsample_bytree: from   0.70 to   0.80
     Parameters:
-    eta :  0.25  subsample :  0.7  gamma :  0.1  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.15  eta :  0.1  colsample_bytree :  0.8  scale_pos_weight :  300  subsample :  0.9  
     
-    [0]	train-auc:0.980951	valid-auc:0.964096
-    [9]	train-auc:0.999978	valid-auc:0.966473
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0031  threshold: 0.9417  random number: 0.3768 -> accepted
     
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0015  threshold: 0.8647  random number: 0.9373 -> rejected
-    
-    Iteration =    83  T =     0.012623
-    selected in next_choice: gamma     : from   0.10 to   0.05
+    Iteration =    56  T =     0.056897
+    selected move: subsample : from   0.90 to   1.00
     Parameters:
-    eta :  0.25  subsample :  0.7  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.15  scale_pos_weight :  300  colsample_bytree :  0.8  eta :  0.1  subsample :  1.0  
     
-    [0]	train-auc:0.980951	valid-auc:0.964096
-    [9]	train-auc:0.999978	valid-auc:0.966473
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0123  threshold: 0.7554  random number: 0.2555 -> accepted
     
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0015  threshold: 0.8647  random number: 0.7710 -> accepted
-    
-    Iteration =    84  T =     0.012623
-    selected in next_choice: eta       : from   0.25 to   0.30
+    Iteration =    57  T =     0.056897
+    selected move: gamma     : from   0.15 to   0.10
     Parameters:
-    eta :  0.3  subsample :  0.7  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.1  eta :  0.1  colsample_bytree :  0.8  scale_pos_weight :  300  subsample :  1.0  
     
-    [0]	train-auc:0.980951	valid-auc:0.964096
-    [9]	train-auc:0.999983	valid-auc:0.970061
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.3453 -> accepted
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    85  T =     0.012623
-    selected in next_choice: gamma     : from   0.05 to   0.00
+    Iteration =    58  T =     0.056897
+    selected move: subsample : from   1.00 to   0.90
     Parameters:
-    eta :  0.3  subsample :  0.7  gamma :  0.0  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.1  scale_pos_weight :  300  colsample_bytree :  0.8  eta :  0.1  subsample :  0.9  
     
-    [0]	train-auc:0.980951	valid-auc:0.964096
-    [9]	train-auc:0.999984	valid-auc:0.970061
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.9569 -> accepted
-    
-    Iteration =    86  T =     0.010729
-    selected in next_choice: subsample : from   0.70 to   0.60
+    Iteration =    59  T =     0.056897
+    selected move: subsample : from   0.90 to   0.80
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.0  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.1  eta :  0.1  colsample_bytree :  0.8  scale_pos_weight :  300  subsample :  0.8  
     
-    [0]	train-auc:0.980171	valid-auc:0.963853
-    [9]	train-auc:0.999969	valid-auc:0.976469
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.81  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0027  threshold: 0.7428  random number: 0.1412 -> accepted
-    
-    Iteration =    87  T =     0.010729
-    selected in next_choice: max_depth : from  15.00 to  20.00
+    Iteration =    60  T =     0.056897
+    selected move: gamma     : from   0.10 to   0.05
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.0  scale_pos_weight :  30  max_depth :  20  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.05  scale_pos_weight :  300  colsample_bytree :  0.8  eta :  0.1  subsample :  0.8  
     
-    [0]	train-auc:0.980171	valid-auc:0.963853
-    [9]	train-auc:0.999969	valid-auc:0.976469
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.5804 -> accepted
     
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
+    Iteration =    61  T =     0.048362
+    selected move: scale_pos_weight: from 300.00 to  50.00
+    Parameters:
+    max_depth :  25  gamma :  0.05  eta :  0.1  colsample_bytree :  0.8  scale_pos_weight :  50  subsample :  0.8  
     
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.3054 -> accepted
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Local improvement
     
-    Iteration =    88  T =     0.010729
-    selected in next_choice: max_depth : from  20.00 to  15.00
+    Iteration =    62  T =     0.048362
+    selected move: gamma     : from   0.05 to   0.00
+    Parameters:
+    max_depth :  25  gamma :  0.0  scale_pos_weight :  50  colsample_bytree :  0.8  eta :  0.1  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.8479 -> accepted
+    
+    Iteration =    63  T =     0.048362
+    selected move: subsample : from   0.80 to   0.70
+    Parameters:
+    max_depth :  25  gamma :  0.0  eta :  0.1  colsample_bytree :  0.8  scale_pos_weight :  50  subsample :  0.7  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0026  threshold: 0.9326  random number: 0.3235 -> accepted
+    
+    Iteration =    64  T =     0.048362
+    selected move: colsample_bytree: from   0.80 to   0.90
+    Parameters:
+    max_depth :  25  gamma :  0.0  scale_pos_weight :  50  colsample_bytree :  0.9  eta :  0.1  subsample :  0.7  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Local improvement
+    
+    Iteration =    65  T =     0.048362
+    selected move: subsample : from   0.70 to   0.80
+    Parameters:
+    max_depth :  25  gamma :  0.0  eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  50  subsample :  0.8  
+    
+        F-Score:   0.80  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0235  threshold: 0.5313  random number: 0.0708 -> accepted
+    
+    Iteration =    66  T =     0.041108
+    selected move: colsample_bytree: from   0.90 to   0.80
     
     Combination revisited - searching again
-    selected in next_choice: gamma     : from   0.00 to   0.05
+    selected move: gamma     : from   0.00 to   0.05
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.8  
+    max_depth :  25  gamma :  0.05  scale_pos_weight :  50  colsample_bytree :  0.9  eta :  0.1  subsample :  0.8  
     
-    [0]	train-auc:0.980171	valid-auc:0.963853
-    [9]	train-auc:0.999969	valid-auc:0.976469
+        F-Score:   0.80  previous:   0.80  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0477 -> accepted
     
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
-    
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.0396 -> accepted
-    
-    Iteration =    89  T =     0.010729
-    selected in next_choice: colsample_bytree: from   0.80 to   0.70
+    Iteration =    67  T =     0.041108
+    selected move: scale_pos_weight: from  50.00 to  40.00
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.7  
+    max_depth :  25  gamma :  0.05  eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.8  
     
-    [0]	train-auc:0.980163	valid-auc:0.96385
-    [9]	train-auc:0.999975	valid-auc:0.977051
+        F-Score:   0.81  previous:   0.80  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    90  T =     0.010729
-    selected in next_choice: subsample : from   0.60 to   0.50
+    Iteration =    68  T =     0.041108
+    selected move: max_depth : from  25.00 to  20.00
     Parameters:
-    eta :  0.3  subsample :  0.5  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.7  
+    max_depth :  20  gamma :  0.05  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.1  subsample :  0.8  
     
-    [0]	train-auc:0.975489	valid-auc:0.96254
-    [9]	train-auc:0.996406	valid-auc:0.972038
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.2194 -> accepted
     
-    F-Score:   0.81  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0130  threshold: 0.2338  random number: 0.2768 -> rejected
-    
-    Iteration =    91  T =     0.009120
-    selected in next_choice: colsample_bytree: from   0.70 to   0.60
+    Iteration =    69  T =     0.041108
+    selected move: max_depth : from  20.00 to  15.00
     Parameters:
-    eta :  0.3  subsample :  0.5  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  15  gamma :  0.05  eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.8  
     
-    [0]	train-auc:0.975489	valid-auc:0.96254
-    [9]	train-auc:0.996289	valid-auc:0.967806
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.7928 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0056  threshold: 0.4760  random number: 0.8065 -> rejected
-    
-    Iteration =    92  T =     0.009120
-    selected in next_choice: gamma     : from   0.05 to   0.00
+    Iteration =    70  T =     0.041108
+    selected move: subsample : from   0.80 to   0.70
     Parameters:
-    eta :  0.3  subsample :  0.5  gamma :  0.0  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  15  gamma :  0.05  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.1  subsample :  0.7  
     
-    [0]	train-auc:0.975489	valid-auc:0.96254
-    [9]	train-auc:0.996289	valid-auc:0.967811
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0056  threshold: 0.4760  random number: 0.1773 -> accepted
-    
-    Iteration =    93  T =     0.009120
-    selected in next_choice: colsample_bytree: from   0.60 to   0.50
+    Iteration =    71  T =     0.034942
+    selected move: scale_pos_weight: from  40.00 to  30.00
     Parameters:
-    eta :  0.3  subsample :  0.5  gamma :  0.0  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.5  
+    max_depth :  15  gamma :  0.05  eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  30  subsample :  0.7  
     
-    [0]	train-auc:0.97823	valid-auc:0.970655
-    [9]	train-auc:0.998184	valid-auc:0.975574
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0117  threshold: 0.6473  random number: 0.3056 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Local improvement
-    
-    Iteration =    94  T =     0.009120
-    selected in next_choice: gamma     : from   0.00 to   0.05
+    Iteration =    72  T =     0.034942
+    selected move: colsample_bytree: from   0.90 to   1.00
     Parameters:
-    eta :  0.3  subsample :  0.5  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.5  
+    max_depth :  15  gamma :  0.05  scale_pos_weight :  30  colsample_bytree :  1.0  eta :  0.1  subsample :  0.7  
     
-    [0]	train-auc:0.97823	valid-auc:0.970655
-    [9]	train-auc:0.998211	valid-auc:0.974836
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.81  previous:   0.82  best so far:   0.83
-    Worse result
-    
-    F-Score decline:  -0.0030  threshold: 0.6763  random number: 0.1546 -> accepted
-    
-    Iteration =    95  T =     0.009120
-    selected in next_choice: subsample : from   0.50 to   0.60
+    Iteration =    73  T =     0.034942
+    selected move: max_depth : from  15.00 to  10.00
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.05  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.5  
+    max_depth :  10  gamma :  0.05  eta :  0.1  colsample_bytree :  1.0  scale_pos_weight :  30  subsample :  0.7  
     
-    [0]	train-auc:0.982153	valid-auc:0.978917
-    [9]	train-auc:0.999976	valid-auc:0.973996
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.5850 -> accepted
     
-    F-Score:   0.81  previous:   0.81  best so far:   0.83
-    Worse result
+    Iteration =    74  T =     0.034942
+    selected move: max_depth : from  10.00 to  15.00
     
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.9547 -> accepted
-    
-    Iteration =    96  T =     0.007752
-    selected in next_choice: scale_pos_weight: from  30.00 to  40.00
+    Combination revisited - searching again
+    selected move: subsample : from   0.70 to   0.80
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.05  scale_pos_weight :  40  max_depth :  15  colsample_bytree :  0.5  
+    max_depth :  10  gamma :  0.05  scale_pos_weight :  30  colsample_bytree :  1.0  eta :  0.1  subsample :  0.8  
     
-    [0]	train-auc:0.982148	valid-auc:0.978923
-    [9]	train-auc:0.999974	valid-auc:0.979448
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0103  threshold: 0.6806  random number: 0.4263 -> accepted
     
-    F-Score:   0.82  previous:   0.81  best so far:   0.83
-    Local improvement
-    
-    Iteration =    97  T =     0.007752
-    selected in next_choice: gamma     : from   0.05 to   0.10
+    Iteration =    75  T =     0.034942
+    selected move: gamma     : from   0.05 to   0.10
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.1  scale_pos_weight :  40  max_depth :  15  colsample_bytree :  0.5  
+    max_depth :  10  gamma :  0.1  eta :  0.1  colsample_bytree :  1.0  scale_pos_weight :  30  subsample :  0.8  
     
-    [0]	train-auc:0.982148	valid-auc:0.978923
-    [9]	train-auc:0.999974	valid-auc:0.979486
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.1013 -> accepted
     
-    F-Score:   0.82  previous:   0.82  best so far:   0.83
-    Worse result
+    Iteration =    76  T =     0.029700
+    selected move: gamma     : from   0.10 to   0.05
     
-    F-Score decline:   0.0000  threshold: 1.0000  random number: 0.1546 -> accepted
-    
-    Iteration =    98  T =     0.007752
-    selected in next_choice: colsample_bytree: from   0.50 to   0.60
+    Combination revisited - searching again
+    selected move: subsample : from   0.80 to   0.70
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.1  scale_pos_weight :  40  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.1  scale_pos_weight :  30  colsample_bytree :  1.0  eta :  0.1  subsample :  0.7  
     
-    [0]	train-auc:0.982163	valid-auc:0.979002
-    [9]	train-auc:0.999956	valid-auc:0.974888
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-    F-Score:   0.83  previous:   0.82  best so far:   0.83
-    Local improvement
-    
-    Iteration =    99  T =     0.007752
-    selected in next_choice: scale_pos_weight: from  40.00 to  30.00
+    Iteration =    77  T =     0.029700
+    selected move: colsample_bytree: from   1.00 to   0.90
     Parameters:
-    eta :  0.3  subsample :  0.6  gamma :  0.1  scale_pos_weight :  30  max_depth :  15  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.1  eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  30  subsample :  0.7  
     
-    [0]	train-auc:0.980232	valid-auc:0.963372
-    [9]	train-auc:0.999971	valid-auc:0.973973
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0087  threshold: 0.6832  random number: 0.5005 -> accepted
     
-    F-Score:   0.81  previous:   0.83  best so far:   0.83
-    Worse result
+    Iteration =    78  T =     0.029700
+    selected move: eta       : from   0.10 to   0.05
+    Parameters:
+    max_depth :  10  gamma :  0.1  scale_pos_weight :  30  colsample_bytree :  0.9  eta :  0.05  subsample :  0.7  
     
-    F-Score decline:  -0.0161  threshold: 0.0822  random number: 0.8339 -> rejected
+        F-Score:   0.82  previous:   0.81  best so far:   0.83
+        Local improvement
     
-     945.2413119014333  seconds process time
+    Iteration =    79  T =     0.029700
+    selected move: gamma     : from   0.10 to   0.15
+    Parameters:
+    max_depth :  10  gamma :  0.15  eta :  0.05  colsample_bytree :  0.9  scale_pos_weight :  30  subsample :  0.7  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.5150 -> accepted
+    
+    Iteration =    80  T =     0.029700
+    selected move: subsample : from   0.70 to   0.80
+    Parameters:
+    max_depth :  10  gamma :  0.15  scale_pos_weight :  30  colsample_bytree :  0.9  eta :  0.05  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.82  best so far:   0.83
+        Worse result. F-Score change:  -0.0117  threshold: 0.5995  random number: 0.4212 -> accepted
+    
+    Iteration =    81  T =     0.025245
+    selected move: eta       : from   0.05 to   0.01
+    Parameters:
+    max_depth :  10  gamma :  0.15  eta :  0.01  colsample_bytree :  0.9  scale_pos_weight :  30  subsample :  0.8  
+    
+        F-Score:   0.80  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:  -0.0044  threshold: 0.7974  random number: 0.2033 -> accepted
+    
+    Iteration =    82  T =     0.025245
+    selected move: max_depth : from  10.00 to  15.00
+    Parameters:
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  30  colsample_bytree :  0.9  eta :  0.01  subsample :  0.8  
+    
+        F-Score:   0.80  previous:   0.80  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.8129 -> accepted
+    
+    Iteration =    83  T =     0.025245
+    selected move: eta       : from   0.01 to   0.05
+    Parameters:
+    max_depth :  15  gamma :  0.15  eta :  0.05  colsample_bytree :  0.9  scale_pos_weight :  30  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.80  best so far:   0.83
+        Local improvement
+    
+    Iteration =    84  T =     0.025245
+    selected move: gamma     : from   0.15 to   0.10
+    Parameters:
+    max_depth :  15  gamma :  0.1  scale_pos_weight :  30  colsample_bytree :  0.9  eta :  0.05  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Local improvement
+    
+    Iteration =    85  T =     0.025245
+    selected move: colsample_bytree: from   0.90 to   1.00
+    Parameters:
+    max_depth :  15  gamma :  0.1  eta :  0.05  colsample_bytree :  1.0  scale_pos_weight :  30  subsample :  0.8  
+    
+        F-Score:   0.80  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:  -0.0132  threshold: 0.5071  random number: 0.9065 -> rejected
+    
+    Iteration =    86  T =     0.021459
+    selected move: scale_pos_weight: from  30.00 to  40.00
+    Parameters:
+    max_depth :  15  gamma :  0.1  eta :  0.05  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:  -0.0030  threshold: 0.8354  random number: 0.4724 -> accepted
+    
+    Iteration =    87  T =     0.021459
+    selected move: gamma     : from   0.10 to   0.15
+    Parameters:
+    max_depth :  15  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.05  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.1309 -> accepted
+    
+    Iteration =    88  T =     0.021459
+    selected move: eta       : from   0.05 to   0.10
+    Parameters:
+    max_depth :  15  gamma :  0.15  eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Local improvement
+    
+    Iteration =    89  T =     0.021459
+    selected move: gamma     : from   0.15 to   0.10
+    Parameters:
+    max_depth :  15  gamma :  0.1  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.1  subsample :  0.8  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.9253 -> accepted
+    
+    Iteration =    90  T =     0.021459
+    selected move: eta       : from   0.10 to   0.20
+    Parameters:
+    max_depth :  15  gamma :  0.1  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.8  
+    
+        F-Score:   0.83  previous:   0.81  best so far:   0.83
+        Local improvement
+        Global improvement - best f-score updated
+    
+    Iteration =    91  T =     0.018240
+    selected move: max_depth : from  15.00 to  10.00
+    Parameters:
+    max_depth :  10  gamma :  0.1  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.2  subsample :  0.8  
+    
+        F-Score:   0.83  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:  -0.0031  threshold: 0.8027  random number: 0.7138 -> accepted
+    
+    Iteration =    92  T =     0.018240
+    selected move: gamma     : from   0.10 to   0.05
+    Parameters:
+    max_depth :  10  gamma :  0.05  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.8  
+    
+        F-Score:   0.83  previous:   0.83  best so far:   0.83
+        Local improvement
+    
+    Iteration =    93  T =     0.018240
+    selected move: max_depth : from  10.00 to  15.00
+    Parameters:
+    max_depth :  15  gamma :  0.05  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.2  subsample :  0.8  
+    
+        F-Score:   0.83  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.6682 -> accepted
+    
+    Iteration =    94  T =     0.018240
+    selected move: max_depth : from  15.00 to  10.00
+    
+    Combination revisited - searching again
+    selected move: subsample : from   0.80 to   0.90
+    Parameters:
+    max_depth :  15  gamma :  0.05  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.9  
+    
+        F-Score:   0.83  previous:   0.83  best so far:   0.83
+        Worse result. F-Score change:  -0.0044  threshold: 0.7331  random number: 0.0876 -> accepted
+    
+    Iteration =    95  T =     0.018240
+    selected move: gamma     : from   0.05 to   0.00
+    Parameters:
+    max_depth :  15  gamma :  0.0  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.2  subsample :  0.9  
+    
+        F-Score:   0.83  previous:   0.83  best so far:   0.83
+        Local improvement
+    
+    Iteration =    96  T =     0.015504
+    selected move: gamma     : from   0.00 to   0.05
+    
+    Combination revisited - searching again
+    selected move: max_depth : from  15.00 to  10.00
+    Parameters:
+    max_depth :  10  gamma :  0.0  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.9  
+    
+        F-Score:   0.84  previous:   0.83  best so far:   0.83
+        Local improvement
+        Global improvement - best f-score updated
+    
+    Iteration =    97  T =     0.015504
+    selected move: colsample_bytree: from   0.90 to   1.00
+    Parameters:
+    max_depth :  10  gamma :  0.0  scale_pos_weight :  40  colsample_bytree :  1.0  eta :  0.2  subsample :  0.9  
+    
+        F-Score:   0.82  previous:   0.84  best so far:   0.84
+        Worse result. F-Score change:  -0.0153  threshold: 0.2770  random number: 0.3914 -> rejected
+    
+    Iteration =    98  T =     0.015504
+    selected move: scale_pos_weight: from  40.00 to  50.00
+    Parameters:
+    max_depth :  10  gamma :  0.0  scale_pos_weight :  50  colsample_bytree :  0.9  eta :  0.2  subsample :  0.9  
+    
+        F-Score:   0.82  previous:   0.84  best so far:   0.84
+        Worse result. F-Score change:  -0.0166  threshold: 0.2479  random number: 0.2071 -> accepted
+    
+    Iteration =    99  T =     0.015504
+    selected move: subsample : from   0.90 to   0.80
+    Parameters:
+    max_depth :  10  gamma :  0.0  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  50  subsample :  0.8  
+    
+        F-Score:   0.82  previous:   0.82  best so far:   0.84
+        Worse result. F-Score change:  -0.0013  threshold: 0.8934  random number: 0.3812 -> accepted
+    
+      25.7 minutes process time
     
     Best variable parameters found:
     
-    {'eta': 0.2, 'subsample': 0.8, 'gamma': 0.15, 'scale_pos_weight': 50, 'max_depth': 5, 'colsample_bytree': 0.6}
+    {'max_depth': 10, 'gamma': 0.0, 'eta': 0.2, 'colsample_bytree': 0.9, 'scale_pos_weight': 40, 'subsample': 0.9}
     
 
 ## Evaluation on the test dataset.
 
-The evaluation on the test dataset results to an F-Score of 0.85 which is quite good. The plot showing the F-Score during the Simulated Annealing iterations clearly shows large fluctuations in the first iterations and much smaller in the last ones.
+The evaluation on the test dataset results to an F-Score of 0.81 which is considered good given the high imbalance in the classes. The run time was 22 minutes. 
 
-The best hyper-parameters found are in the ranges expected to be good according to all sources. Importantly, one can proceed this way:
-* narrowing the ranges of these hyper-parameters   
-* possibly adding others which are not used here (for example, regularization parameters)
-* possibly doing some variable selection on the basis of the variable importance information.
-
+The best hyper-parameters found are in the ranges expected to be good according to all sources. One can then proceed this way:
+* Narrowing the ranges of these hyper-parameters,   
+* Possibly adding others which are not used here (for example, regularization parameters),
+* Possibly doing some variable selection on the basis of the variable importance information,
+* Importantly, combining different models, ensemble-like. 
 
 
 ```python
+print('\nBest parameters found:\n')  
+
+print(best_params)
+
 print('\nEvaluation on the test dataset\n')  
 
 best_f_score,best_model=do_train(best_params, param, dtrain,'train',trainY,dtest,'test',testY,print_conf_matrix=True)
 
 
-print('\nf-score on the test dataset: {:6.2f}'.format(best_f_score))
+print('\nF-score on the test dataset: {:6.2f}'.format(best_f_score))
 
-plt.plot(results['F-Score'])
-plt.xlabel('Iterations')
-plt.ylabel('F-Score')
+#fig, axes = plt.subplots(nrows=1, ncols=2,figsize=(10,10))
+#axes = axes.flatten()
+#axes[0].plot(results['F-Score'])
+#axes[1].plot(results['Best F-Score'])
+#plt.show()
+
+f, (ax1,ax2) = plt.subplots(nrows=1, ncols=2, sharey=False, figsize=(8,5))
+ax1.plot(results['F-Score'])
+ax2.plot(results['Best F-Score'])
+ax1.set_xlabel('Iterations',fontsize=11)
+ax2.set_xlabel('Iterations',fontsize=11)
+ax1.set_ylabel('F-Score',fontsize=11)
+ax2.set_ylabel('Best F-Score',fontsize=11)
+ax1.set_ylim([0.7,0.9])
+ax2.set_ylim([0.7,0.9])
+plt.tight_layout()
+
+
+##f.subplots_adjust(hspace=5.0)
+#plt.xlabel('Iterations')
+
 plt.show()
 
+##axarr[0].xlabel('Iterations')
 
-xgb.plot_importance(best_model) 
+##plt.plot(results['F-Score'])
 
+#plt.ylabel('F-Score')
+#plt.show()
 
+#plt.plot(results['Best F-Score'])
+#plt.xlabel('Iterations')
+#plt.ylabel('Best F-Score')
+#plt.show()
 
+print('\nVariables importance:\n')  
+
+p = xgb.plot_importance(best_model) 
+plt.show()
+
+with pd.option_context('display.max_rows', None, 'display.max_columns', 3):
+    print(results)
+
+results.duplicated()
 ```
 
+    
+    Best parameters found:
+    
+    {'max_depth': 10, 'gamma': 0.0, 'eta': 0.2, 'colsample_bytree': 0.9, 'scale_pos_weight': 40, 'subsample': 0.9}
     
     Evaluation on the test dataset
     
     Parameters:
-    eta :  0.2  subsample :  0.8  gamma :  0.15  scale_pos_weight :  50  max_depth :  5  colsample_bytree :  0.6  
+    max_depth :  10  gamma :  0.0  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.9  
     
-    [0]	train-auc:0.957356	test-auc:0.949645
-    [9]	train-auc:0.989536	test-auc:0.976601
     
     confusion matrix
     ----------------
-    tn: 85275 fp:    19
-    fn:    29 tp:   119
+    tn: 85289 fp:    16
+    fn:    27 tp:   110
     
-    f-score on the test dataset:   0.83
+    F-score on the test dataset:   0.84
     
 
 
 ![png](output_17_1.png)
 
 
-
-
-
-    <matplotlib.axes._subplots.AxesSubplot at 0xbcdc748>
-
-
+    
+    Variables importance:
+    
+    
 
 
 ![png](output_17_3.png)
 
 
-### Plot 
+       max_depth     ...      Best F-Score
+    0          5     ...          0.773973
+    1          5     ...           0.81295
+    2         10     ...          0.819188
+    3         15     ...          0.819188
+    4         15     ...          0.819188
+    5         15     ...          0.819188
+    6         15     ...          0.819188
+    7         10     ...          0.819188
+    8          5     ...          0.820513
+    9          5     ...          0.820513
+    10         5     ...          0.820513
+    11         5     ...          0.820513
+    12         5     ...          0.824818
+    13        10     ...          0.824818
+    14        10     ...          0.824818
+    15        10     ...          0.824818
+    16        10     ...          0.824818
+    17        10     ...          0.824818
+    18         5     ...          0.824818
+    19         5     ...          0.824818
+    20         5     ...          0.826568
+    21         5     ...          0.826568
+    22        10     ...          0.826568
+    23        10     ...          0.826568
+    24        10     ...          0.826568
+    25        10     ...          0.826568
+    26        10     ...          0.826568
+    27        10     ...          0.826568
+    28        10     ...          0.826568
+    29        10     ...          0.826568
+    30        10     ...          0.826568
+    31        15     ...          0.826568
+    32        15     ...          0.826568
+    33        10     ...          0.826568
+    34        10     ...          0.826568
+    35        15     ...          0.826568
+    36        20     ...          0.826568
+    37        20     ...          0.826568
+    38        20     ...          0.826568
+    39        15     ...          0.826568
+    40        15     ...          0.826568
+    41        15     ...          0.830189
+    42        15     ...          0.830189
+    43        15     ...          0.830189
+    44        15     ...          0.830189
+    45        15     ...          0.830189
+    46        20     ...          0.830189
+    47        20     ...          0.830189
+    48        20     ...          0.830189
+    49        20     ...          0.830189
+    50        20     ...          0.830189
+    51        20     ...          0.830189
+    52        25     ...          0.830189
+    53        25     ...          0.830189
+    54        25     ...          0.830189
+    55        25     ...          0.830189
+    56        25     ...          0.830189
+    57        25     ...          0.830189
+    58        25     ...          0.830189
+    59        25     ...          0.830189
+    60        25     ...          0.830189
+    61        25     ...          0.830189
+    62        25     ...          0.830189
+    63        25     ...          0.830189
+    64        25     ...          0.830189
+    65        25     ...          0.830189
+    66        25     ...          0.830189
+    67        25     ...          0.830189
+    68        20     ...          0.830189
+    69        15     ...          0.830189
+    70        15     ...          0.830189
+    71        15     ...          0.830189
+    72        15     ...          0.830189
+    73        10     ...          0.830189
+    74        10     ...          0.830189
+    75        10     ...          0.830189
+    76        10     ...          0.830189
+    77        10     ...          0.830189
+    78        10     ...          0.830189
+    79        10     ...          0.830189
+    80        10     ...          0.830189
+    81        10     ...          0.830189
+    82        15     ...          0.830189
+    83        15     ...          0.830189
+    84        15     ...          0.830189
+    85        15     ...          0.830189
+    86        15     ...          0.830189
+    87        15     ...          0.830189
+    88        15     ...          0.830189
+    89        15     ...          0.830189
+    90        15     ...          0.832714
+    91        10     ...          0.832714
+    92        10     ...          0.832714
+    93        15     ...          0.832714
+    94        15     ...          0.832714
+    95        15     ...          0.832714
+    96        10     ...          0.835821
+    97        10     ...          0.835821
+    98        10     ...          0.835821
+    99        10     ...          0.835821
+    
+    [100 rows x 8 columns]
+    
 
 
-```python
-best_params
-```
 
 
-
-
-    {'colsample_bytree': 0.6,
-     'eta': 0.2,
-     'gamma': 0.15,
-     'max_depth': 5,
-     'scale_pos_weight': 50,
-     'subsample': 0.8}
-
-
-
-
-```python
-results['Duplicate']= results.duplicated([*tune_dic.keys()],keep='first')
-results
-
-##results['F-Score'][results['F-Score'] <= 0.60]
-
-{k: param[k] for k in tune_dic.keys()}
-
-results
-```
-
-
-
-
-<div>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>max_depth</th>
-      <th>subsample</th>
-      <th>colsample_bytree</th>
-      <th>eta</th>
-      <th>gamma</th>
-      <th>scale_pos_weight</th>
-      <th>F-Score</th>
-      <th>Best F-Score</th>
-      <th>Duplicate</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>0</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.15</td>
-      <td>0.2</td>
-      <td>50</td>
-      <td>0.772881</td>
-      <td>0.772881</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>1</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.15</td>
-      <td>0.2</td>
-      <td>40</td>
-      <td>0.77931</td>
-      <td>0.77931</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.15</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.772881</td>
-      <td>0.77931</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.15</td>
-      <td>0.15</td>
-      <td>300</td>
-      <td>0.742671</td>
-      <td>0.77931</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.9</td>
-      <td>0.15</td>
-      <td>0.15</td>
-      <td>300</td>
-      <td>0.721311</td>
-      <td>0.77931</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>5</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>300</td>
-      <td>0.753333</td>
-      <td>0.77931</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>6</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.25</td>
-      <td>0.15</td>
-      <td>300</td>
-      <td>0.765101</td>
-      <td>0.77931</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>7</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.784983</td>
-      <td>0.784983</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>8</th>
-      <td>5</td>
-      <td>0.9</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.767677</td>
-      <td>0.784983</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>9</th>
-      <td>5</td>
-      <td>0.8</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.805654</td>
-      <td>0.805654</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>10</th>
-      <td>5</td>
-      <td>0.8</td>
-      <td>0.7</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.819788</td>
-      <td>0.819788</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>11</th>
-      <td>5</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.830325</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>12</th>
-      <td>5</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>50</td>
-      <td>0.797251</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>13</th>
-      <td>5</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>40</td>
-      <td>0.816901</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>14</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>40</td>
-      <td>0.821429</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>15</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.7</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>40</td>
-      <td>0.788927</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>16</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.7</td>
-      <td>0.2</td>
-      <td>0.15</td>
-      <td>30</td>
-      <td>0.801418</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>17</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.817204</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>18</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.15</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.817204</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>19</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.808511</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>20</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.808664</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>21</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.811388</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>22</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.811388</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>23</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.808664</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>24</th>
-      <td>10</td>
-      <td>0.9</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.05</td>
-      <td>40</td>
-      <td>0.808511</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>25</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.1</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.81295</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>26</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.15</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.821818</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>27</th>
-      <td>15</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.15</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.817518</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>28</th>
-      <td>15</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.823105</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>29</th>
-      <td>15</td>
-      <td>0.8</td>
-      <td>0.6</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>50</td>
-      <td>0.817518</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>...</th>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-    </tr>
-    <tr>
-      <th>70</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.05</td>
-      <td>40</td>
-      <td>0.804196</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>71</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.791667</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>72</th>
-      <td>10</td>
-      <td>0.8</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.804196</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>73</th>
-      <td>5</td>
-      <td>0.8</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.811388</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>74</th>
-      <td>5</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.824373</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>75</th>
-      <td>5</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.828571</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>76</th>
-      <td>5</td>
-      <td>0.7</td>
-      <td>0.9</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.814286</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>77</th>
-      <td>10</td>
-      <td>0.7</td>
-      <td>0.9</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.801418</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>78</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.9</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.795775</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>79</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.9</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.79021</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>80</th>
-      <td>15</td>
-      <td>0.8</td>
-      <td>0.9</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.777778</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>81</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.2</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.811388</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>82</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.25</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.809859</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>83</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.25</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.809859</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>84</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.817204</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>85</th>
-      <td>15</td>
-      <td>0.7</td>
-      <td>0.8</td>
-      <td>0.3</td>
-      <td>0</td>
-      <td>30</td>
-      <td>0.817204</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>86</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.8</td>
-      <td>0.3</td>
-      <td>0</td>
-      <td>30</td>
-      <td>0.814545</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>87</th>
-      <td>20</td>
-      <td>0.6</td>
-      <td>0.8</td>
-      <td>0.3</td>
-      <td>0</td>
-      <td>30</td>
-      <td>0.814545</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>88</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.8</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.814545</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>89</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.7</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.821818</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>90</th>
-      <td>15</td>
-      <td>0.5</td>
-      <td>0.7</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.808824</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>91</th>
-      <td>15</td>
-      <td>0.5</td>
-      <td>0.6</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.816176</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>92</th>
-      <td>15</td>
-      <td>0.5</td>
-      <td>0.6</td>
-      <td>0.3</td>
-      <td>0</td>
-      <td>30</td>
-      <td>0.816176</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>93</th>
-      <td>15</td>
-      <td>0.5</td>
-      <td>0.5</td>
-      <td>0.3</td>
-      <td>0</td>
-      <td>30</td>
-      <td>0.817518</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>94</th>
-      <td>15</td>
-      <td>0.5</td>
-      <td>0.5</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.814545</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>95</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.5</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>30</td>
-      <td>0.814545</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>96</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.5</td>
-      <td>0.3</td>
-      <td>0.05</td>
-      <td>40</td>
-      <td>0.824818</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>97</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.5</td>
-      <td>0.3</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.824818</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>98</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.6</td>
-      <td>0.3</td>
-      <td>0.1</td>
-      <td>40</td>
-      <td>0.829091</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-    <tr>
-      <th>99</th>
-      <td>15</td>
-      <td>0.6</td>
-      <td>0.6</td>
-      <td>0.3</td>
-      <td>0.1</td>
-      <td>30</td>
-      <td>0.81295</td>
-      <td>0.830325</td>
-      <td>False</td>
-    </tr>
-  </tbody>
-</table>
-<p>100 rows × 9 columns</p>
-</div>
+    0     False
+    1     False
+    2     False
+    3     False
+    4     False
+    5     False
+    6     False
+    7     False
+    8     False
+    9     False
+    10    False
+    11    False
+    12    False
+    13    False
+    14    False
+    15    False
+    16    False
+    17    False
+    18    False
+    19    False
+    20    False
+    21    False
+    22    False
+    23    False
+    24    False
+    25    False
+    26    False
+    27    False
+    28    False
+    29    False
+          ...  
+    70    False
+    71    False
+    72    False
+    73    False
+    74    False
+    75    False
+    76    False
+    77    False
+    78    False
+    79    False
+    80    False
+    81    False
+    82    False
+    83    False
+    84    False
+    85    False
+    86    False
+    87    False
+    88    False
+    89    False
+    90    False
+    91    False
+    92    False
+    93    False
+    94    False
+    95    False
+    96    False
+    97    False
+    98    False
+    99    False
+    dtype: bool
 
 
