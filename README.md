@@ -192,7 +192,7 @@ for i in range(30):
     
 
 
-![png](output_3_1.png)
+![png](Images/output_3_1.png?raw=true)
 
 
 ## Data partitioning.
@@ -696,7 +696,7 @@ with pd.option_context('display.max_rows', None, 'display.max_columns', 3):
     
 
 
-![png](![](Images/output_17_1.png?raw=true)
+![png](Images/output_17_1.png?raw=true)
 
 
     
@@ -705,7 +705,7 @@ with pd.option_context('display.max_rows', None, 'display.max_columns', 3):
     
 
 
-![png](output_17_3.png)
+![png](Images/output_17_3.png?raw=true)
 
 
 
