@@ -77,7 +77,7 @@ dat['Class'].value_counts()
 
 Although the context of most of the variables is not known (recall that V1-V28 are factors summarizing the transactional data), we know that V1-V28 are by construction standardized, with a mean of 0 and and a standard deviation of 1. We standardize the Time and Amount variables too.
 
-The data exploration and in particular Welch’s t-tests reveal that almost all the factors are significantly associated with the Class variable. The mean of these variables is almost zero in Class 0 and clearly non-zero in Class 1. The Time and Amount variables are also significant. There does not seem to by any reason for variable selection yet.
+The data exploration and in particular Welch’s t-tests reveal that almost all the factors are significantly associated with the Class variable. The mean of these variables is almost zero in Class 0 and clearly non-zero in Class 1. The Time and Amount variables are also significant. There does not seem to by any reason for variable selection yet. We could drop the Time variable which is probably useless.
 
 Some of the factors (and the Amount variable) are quite skewed and have very thin distributions. If we were to apply some other method (say, logistic regression) we could apply some transformations (and probably binning) but XGBoost is insensitive to such deviations from normality.  
 
@@ -102,7 +102,6 @@ for i in range(30):
     kurtosis = stats.kurtosis(dat.loc[:,col_name])
     print('Variable: {:7s}'.format(col_name),end='')    
     print('p-value: {:6.3f}  skewness: {:6.3f}  kurtosis: {:6.3f}'.format(p_val, skewness, kurtosis))
-
     
 fig, axes = plt.subplots(nrows=6, ncols=5,figsize=(10,10))
 axes = axes.flatten()
@@ -226,7 +225,7 @@ testY = Class[inTest]
 
 First we create the matrices in the format required by XGBoost with the xgb.DMatrix() function, passing for each dataset the predictors data and the labels. Then we set some fixed parameters. The number of boosting iterations (num_rounds) is set to 20. Normally we would use a larger number, but we want to keep the processing time low for the purposes of this experiment.
 
-We initialize the **param dictionary** with silent=1 (no messages). Parameter min_child_weight is set at the default value of 1 because the data is highly unbalanced. This is the minimum weighted number of observations in a child node for further partitioning. The objective is binary classification and the evaluation metric is the Area Under Curve (AUC), the default for binary classification. In a more advanced implementation we could make a customized evaluation function, as described in [XGBoost API](http://xgboost.readthedocs.io/en/latest/python/python_api.html "XGBoost API"). The internal random numbers seed is set to a constant for reproducible results (this is not guaranteed though, among other reasons because XGBoost runs in threads).     
+We initialize the **param dictionary** with silent=1 (no messages). Parameter min_child_weight is set at the default value of 1 because the data is highly unbalanced. This is the minimum weighted number of observations in a child node for further partitioning. The objective is binary classification and the evaluation metric is the Area Under Curve (AUC), the default for binary classification. In a more advanced implementation we could make a customized evaluation function, as described in the [XGBoost API](http://xgboost.readthedocs.io/en/latest/python/python_api.html "XGBoost API"). The internal random numbers seed is set to a constant for reproducible results (this is not guaranteed though, among other reasons because XGBoost runs in threads).     
 
 We are going to **expand the param dictionary** with the parameters in the heuristic search.
 
@@ -248,7 +247,7 @@ param = {'silent':1,
          'seed' : 1234}  
 ```
 
-#### Preparing the Booster: Variable parameters 
+## Preparing the Booster: Variable parameters 
 
 In what follows we combine the suggestions from several sources, notably:
 
@@ -329,7 +328,7 @@ It then trains the model and returns the F-score of the predictions on the valid
 - the train dataset in XGBoost format (train),  
 - the number of boosting iterations  (num_boost),  
 - a watchlist with datasets information to show progress (evals), 
-- the frequency of reporting (verbose_eval), here set to a high value to report only in the first and last iteration.
+- the frequency of reporting (verbose_eval), here set to no reporting at all to avoid a very lengthy output.
 
 
 
@@ -437,11 +436,11 @@ At each iteration of the Simulated Annealing algorith, one combination of hyper-
 * If this F-score is better (larger) than the one at the previous iteration, i.e. there is a "local" improvement, the combination is accepted as the current combination and a neighbouring combination is selected for the next iteration through a call to the next_choice() function.
 * Otherwise, i.e. if this F-score is worse (smaller) than the one at the previous iteration and the decline is Δf < 0, the combination is accepted as the current one with probability exp(-beta Δf/T) where beta is a constant and T is the current "temperature". The idea is that we start with a high temperature and "bad" solutions are easily accepted at first, in the hope of exploring wide areas of the search space. But as the temperature drops, bad solutions are less likely to be accepted and the search becomes more focused.      
 
-The temperature starts at a fixed value T0 and is reduced by a factor of alpha < 1 every n number of iterations. Here T0 = 0.40, n=5 and a = 0.85. The beta constant is 1.3.  
+The temperature starts at a fixed value T0 and is reduced by a factor of alpha < 1 every n number of iterations. Here T0 = 0.40, n=5 and alpha = 0.85. The beta constant is 1.3.  
 
 The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.150, 0.075, 0.038, 0.019, 0.009, i.e. starting from 0.150 and dividing by 2. We set these average probabilities to be around 50% during the first, second,...,fifth 20 iterations respectively and we use Excel Solver to find suitable parameters. The Excel file can be found [here](Data/parameters_for_SA.xlsx).
 
-A **warning**: if the number of iterations is not suficiently smaller than the total number of combinations, there may be too many  repetitions and delays. The simple approach for producing combinations here does not address such cases.  
+A **warning**: if the number of iterations is not suficiently smaller than the total number of combinations, there may be too many  repetitions and delays. The simple approach for producing combinations implemented here does not address such cases.  
 
 
 
@@ -639,13 +638,11 @@ The best hyper-parameters found are in the ranges expected to be good according 
 
 ```python
 print('\nBest parameters found:\n')  
-
 print(best_params)
 
 print('\nEvaluation on the test dataset\n')  
 
 best_f_score,best_model=do_train(best_params, param, dtrain,'train',trainY,dtest,'test',testY,print_conf_matrix=True)
-
 
 print('\nF-score on the test dataset: {:6.2f}'.format(best_f_score))
 
