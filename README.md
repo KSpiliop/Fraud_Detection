@@ -9,6 +9,8 @@ The XGBoost algorithm is a good show case because it has many hyper-parameters. 
 
 For a very good discussion of the theoretical details of XGBoost, see this [Slideshare presentation](https://www.slideshare.net/ShangxuanZhang/kaggle-winning-solution-xgboost-algorithm-let-us-learn-from-its-author "Slideshare presentation") of the algorithm with title "*Kaggle Winning Solution Xgboost algorithm -- Let us learn from its author*" by Tianqi Chen.
 
+This file is also available as a Jupyter notebook [here](Notebook/Notebook.ipynb).
+
 
 ## Loading the data
 
