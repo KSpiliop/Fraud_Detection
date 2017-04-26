@@ -65,12 +65,7 @@ dat['Class'].value_counts()
     
     The distribution of the target variable:
     
-    
-
-
-
-
-    0    284315
+     0    284315
     1       492
     Name: Class, dtype: int64
 
@@ -192,7 +187,7 @@ for i in range(30):
     
 
 
-![png](Images\output_3_1.png?raw=true)
+![png](Images/output_3_1.png?raw=true)
 
 
 ## Data partitioning.
@@ -736,7 +731,7 @@ plt.show()
     
 
 
-![png](Images\output_17_1.png?raw=true)
+![png](Images/output_17_1.png?raw=true)
 
 
     
@@ -745,5 +740,5 @@ plt.show()
     
 
 
-![png](Images\output_17_3.png?raw=true)
+![png](Images/output_17_3.png?raw=true)
 
