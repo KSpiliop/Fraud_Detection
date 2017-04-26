@@ -9,8 +9,6 @@ The XGBoost algorithm is a good show case because it has many hyper-parameters. 
 
 For a very good discussion of the theoretical details of XGBoost, see this [Slideshare presentation](https://www.slideshare.net/ShangxuanZhang/kaggle-winning-solution-xgboost-algorithm-let-us-learn-from-its-author "Slideshare presentation") of the algorithm with title "*Kaggle Winning Solution Xgboost algorithm -- Let us learn from its author*" by Tianqi Chen.
 
-This file is also available as a Jupyter notebook [here](Notebook/Notebook.ipynb).
-
 
 ## Loading the data
 
@@ -67,6 +65,11 @@ dat['Class'].value_counts()
     
     The distribution of the target variable:
     
+    
+
+
+
+
     0    284315
     1       492
     Name: Class, dtype: int64
@@ -102,6 +105,7 @@ for i in range(30):
     kurtosis = stats.kurtosis(dat.loc[:,col_name])
     print('Variable: {:7s}'.format(col_name),end='')    
     print('p-value: {:6.3f}  skewness: {:6.3f}  kurtosis: {:6.3f}'.format(p_val, skewness, kurtosis))
+
     
 fig, axes = plt.subplots(nrows=6, ncols=5,figsize=(10,10))
 axes = axes.flatten()
@@ -188,7 +192,7 @@ for i in range(30):
     
 
 
-![png](Images/output_3_1.png?raw=true)
+![png](Images\output_3_1.png?raw=true)
 
 
 ## Data partitioning.
@@ -225,7 +229,7 @@ testY = Class[inTest]
 
 First we create the matrices in the format required by XGBoost with the xgb.DMatrix() function, passing for each dataset the predictors data and the labels. Then we set some fixed parameters. The number of boosting iterations (num_rounds) is set to 20. Normally we would use a larger number, but we want to keep the processing time low for the purposes of this experiment.
 
-We initialize the **param dictionary** with silent=1 (no messages). Parameter min_child_weight is set at the default value of 1 because the data is highly unbalanced. This is the minimum weighted number of observations in a child node for further partitioning. The objective is binary classification and the evaluation metric is the Area Under Curve (AUC), the default for binary classification. In a more advanced implementation we could make a customized evaluation function, as described in the [XGBoost API](http://xgboost.readthedocs.io/en/latest/python/python_api.html "XGBoost API"). The internal random numbers seed is set to a constant for reproducible results (this is not guaranteed though, among other reasons because XGBoost runs in threads).     
+We initialize the **param dictionary** with silent=1 (no messages). Parameter min_child_weight is set at the default value of 1 because the data is highly unbalanced. This is the minimum weighted number of observations in a child node for further partitioning. The objective is binary classification and the evaluation metric is the Area Under Curve (AUC), the default for binary classification. In a more advanced implementation we could make a customized evaluation function, as described in [XGBoost API](http://xgboost.readthedocs.io/en/latest/python/python_api.html "XGBoost API"). The internal random numbers seed is set to a constant for reproducible results (this is not guaranteed though, among other reasons because XGBoost runs in threads).     
 
 We are going to **expand the param dictionary** with the parameters in the heuristic search.
 
@@ -264,12 +268,12 @@ We select several important parameters for the heuristic search:
 * **colsample_bytree**, in (0,1] with default value 1. This is the subsample ratio of columns (features) used to construct a tree. In [2] values in 0.5-1 are suggested. The advice in [3] is 0.3-0.5. We will try similar values as with subsample.
 * **eta** (or **learning_rate**), in [0,1], with default value 0.3. This is the shrinking rate of the feature weights and larger values (but not too high!) can be used to prevent overfitting. A suggestion in [2] is to use values in 0.01-0.2. We can select some values in [0.01,0.4].
 * **gamma**, in [0, ∞], with default value 0. This is the minimum loss function reduction required for a split. [3] suggests to leave this at 0. We can experiment with values in 0-2 in steps of 0.05.
-* **scale_pos_weight** which controls the balance of positive and negative weights with default value 1. The advice in [1] is to use the ratio of negative to positive cases which is 524 here, i.e. to put a weight that large to the positive cases. [2] similarly suggests a large value in case of high class imbalance as is the case here. We can try some small values and some larger ones. 
+* **scale_pos_weight** which controls the balance of positive and negative weights with default value 1. The advice in [1] is to use the ratio of negative to positive cases which is 595 here, i.e. to put a weight that large to the positive cases. [2] similarly suggests a large value in case of high class imbalance as is the case here. We can try some small values and some larger ones. 
 
 
 The **total number of possible combinations** is 43200 and we are only going to test a small fraction of 100 of them, i.e. as many as the number of the heuristic search iterations. 
 
-We also initialize a dataframe which will hold the results, for later examination and also to avoid repetitions of combinations during the search.
+We also initialize a dataframe which will hold the results, for later examination.
 
 
 
@@ -304,7 +308,7 @@ results = pd.DataFrame(index=range(maxiter), columns=columns) ## dataframe to ho
 
 ```
 
-    Ratio of negative to positive instances:  524.0
+    Ratio of negative to positive instances:  595.5
     Total number of combinations:            43200
     
 
@@ -327,8 +331,7 @@ It then trains the model and returns the F-score of the predictions on the valid
 - the full dictionary of the parameters (param),    
 - the train dataset in XGBoost format (train),  
 - the number of boosting iterations  (num_boost),  
-- a watchlist with datasets information to show progress (evals), 
-- the frequency of reporting (verbose_eval), here set to no reporting at all to avoid a very lengthy output.
+- [ a watchlist with datasets information to show progress (evals) ] --> this is commented-out below. 
 
 
 
@@ -369,9 +372,13 @@ def do_train(cur_choice, param, train,train_s,trainY,valid,valid_s,validY,print_
         param[key]=value
     print('\n')    
     
-    evallist  = [(train,train_s), (valid,valid_s)]
-    model = xgb.train( param, train, num_boost_round=num_rounds,
-                      evals=evallist,verbose_eval=False)    
+##    the commented-out segment below uses a watchlist to monitor the progress of the boosting iterations 
+##    evallist  = [(train,train_s), (valid,valid_s)]
+##    model = xgb.train( param, train, num_boost_round=num_rounds,
+##                      evals=evallist,verbose_eval=False)  
+    
+    model = xgb.train( param, train, num_boost_round=num_rounds)  
+    
     preds = model.predict(valid)
     labels = valid.get_label()
       
@@ -438,7 +445,9 @@ At each iteration of the Simulated Annealing algorith, one combination of hyper-
 
 The temperature starts at a fixed value T0 and is reduced by a factor of alpha < 1 every n number of iterations. Here T0 = 0.40, n=5 and alpha = 0.85. The beta constant is 1.3.  
 
-The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.150, 0.075, 0.038, 0.019, 0.009, i.e. starting from 0.150 and dividing by 2. We set these average probabilities to be around 50% during the first, second,...,fifth 20 iterations respectively and we use Excel Solver to find suitable parameters. The Excel file can be found [here](Data/parameters_for_SA.xlsx).
+The selection of the parameters of this "cooling schedule" can be done easily in MS Excel. In this example we select the average acceptance probabilities for F-Score deterioration of 0.150, 0.075, 0.038, 0.019, 0.009, i.e. starting from 0.150 and dividing by 2. We set these average probabilities to be around 50% during the first, second,...,fifth 20 iterations respectively and we use Excel Solver to find suitable parameters. The Excel file can be found [here](https://github.com/KSpiliop/Fraud_Detection/blob/master/Data/parameters_for_SA.xlsx "Excel file").
+
+Repetitions are avoided with a simple hashing scheme.
 
 A **warning**: if the number of iterations is not suficiently smaller than the total number of combinations, there may be too many  repetitions and delays. The simple approach for producing combinations implemented here does not address such cases.  
 
@@ -455,6 +464,8 @@ best_params = dict() ## initialize dictionary to hold the best parameters
 best_f_score = -1. ## initialize best f-score
 prev_f_score = -1. ## initialize previous f-score
 prev_choice = None ## initialize previous selection of parameters
+weights = list(map(lambda x: 10**x, [0,1,2,3,4])) ## weights for the hash function
+hash_values=set()
 
 for iter in range(maxiter):
     print('\nIteration = {:5d}  T = {:12.6f}'.format(iter,T))
@@ -462,13 +473,21 @@ for iter in range(maxiter):
     ## find next selection of parameters not visited before
     while True:
         cur_choice=next_choice(prev_choice) ## first selection or selection-neighbor of prev_choice
+         
+        ## indices of the selections in alphabetical order of the parameters    
+        indices=[tune_dic[name].index(cur_choice[name]) for name in sorted([*tune_dic.keys()])]
         
         ## check if selection has already been visited
-        tmp=abs(results.loc[:,[*cur_choice.keys()]] - list(cur_choice.values()))
-        tmp=tmp.sum(axis=1)
-        if any(tmp==0): ## selection has already been visited
+        hash_val = sum([i*j for (i, j) in zip(weights, indices)])
+        if hash_val in hash_values:
             print('\nCombination revisited - searching again')
+
+#        tmp=abs(results.loc[:,[*cur_choice.keys()]] - list(cur_choice.values()))
+#        tmp=tmp.sum(axis=1)
+#        if any(tmp==0): ## selection has already been visited
+#            print('\nCombination revisited - searching again')
         else:
+            hash_values.add(hash_val)
             break ## break out of the while-loop
     
     
@@ -526,108 +545,138 @@ print(best_params)
     
     Iteration =     0  T =     0.400000
     Parameters:
-    max_depth :  5  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.8  eta :  0.01  subsample :  1.0  
+    eta :  0.05  colsample_bytree :  0.9  scale_pos_weight :  300  gamma :  0.2  max_depth :  20  subsample :  0.5  
     
-        F-Score:   0.77  previous:  -1.00  best so far:  -1.00
+        F-Score:   0.80  previous:  -1.00  best so far:  -1.00
         Local improvement
         Global improvement - best f-score updated
     
     Iteration =     1  T =     0.340000
-    selected move: colsample_bytree: from   0.80 to   0.70
+    selected move: gamma     : from   0.20 to   0.15
     Parameters:
-    max_depth :  5  gamma :  0.15  eta :  0.01  colsample_bytree :  0.7  scale_pos_weight :  40  subsample :  1.0  
+    eta :  0.05  colsample_bytree :  0.9  scale_pos_weight :  300  gamma :  0.15  max_depth :  20  subsample :  0.5  
     
-        F-Score:   0.81  previous:   0.77  best so far:   0.77
+        F-Score:   0.80  previous:   0.80  best so far:   0.80
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.1169 -> accepted
+    
+    Iteration =     2  T =     0.340000
+    selected move: eta       : from   0.05 to   0.10
+    Parameters:
+    eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  300  gamma :  0.15  max_depth :  20  subsample :  0.5  
+    
+        F-Score:   0.80  previous:   0.80  best so far:   0.80
+        Worse result. F-Score change:  -0.0087  threshold: 0.9672  random number: 0.9110 -> accepted
+    
+    Iteration =     3  T =     0.340000
+    selected move: max_depth : from  20.00 to  15.00
+    Parameters:
+    eta :  0.1  colsample_bytree :  0.9  scale_pos_weight :  300  gamma :  0.15  max_depth :  15  subsample :  0.5  
+    
+        F-Score:   0.80  previous:   0.80  best so far:   0.80
+        Local improvement
+    
+    Iteration =     4  T =     0.340000
+    selected move: eta       : from   0.10 to   0.05
+    Parameters:
+    eta :  0.05  colsample_bytree :  0.9  scale_pos_weight :  300  gamma :  0.15  max_depth :  15  subsample :  0.5  
+    
+        F-Score:   0.80  previous:   0.80  best so far:   0.80
+        Worse result. F-Score change:  -0.0001  threshold: 0.9998  random number: 0.6716 -> accepted
+    
+    Iteration =     5  T =     0.340000
+    selected move: eta       : from   0.05 to   0.01
+    Parameters:
+    eta :  0.01  colsample_bytree :  0.9  scale_pos_weight :  300  gamma :  0.15  max_depth :  15  subsample :  0.5  
+    
+        F-Score:   0.81  previous:   0.80  best so far:   0.80
         Local improvement
         Global improvement - best f-score updated
     
-    Iteration =     2  T =     0.340000
-    selected move: max_depth : from   5.00 to  10.00
+    Iteration =     6  T =     0.289000
+    selected move: eta       : from   0.01 to   0.05
+    
+    Combination revisited - searching again
+    selected move: scale_pos_weight: from 300.00 to 400.00
     Parameters:
-    max_depth :  10  gamma :  0.15  scale_pos_weight :  40  colsample_bytree :  0.7  eta :  0.01  subsample :  1.0  
+    eta :  0.01  colsample_bytree :  0.9  scale_pos_weight :  400  gamma :  0.15  max_depth :  15  subsample :  0.5  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.81
+        Local improvement
+        Global improvement - best f-score updated
+    
+    Iteration =     7  T =     0.289000
+    selected move: colsample_bytree: from   0.90 to   1.00
+    Parameters:
+    eta :  0.01  colsample_bytree :  1.0  scale_pos_weight :  400  gamma :  0.15  max_depth :  15  subsample :  0.5  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.81
+        Worse result. F-Score change:  -0.0043  threshold: 0.9809  random number: 0.0174 -> accepted
+    
+    Iteration =     8  T =     0.289000
+    selected move: eta       : from   0.01 to   0.05
+    Parameters:
+    eta :  0.05  colsample_bytree :  1.0  scale_pos_weight :  400  gamma :  0.15  max_depth :  15  subsample :  0.5  
+    
+        F-Score:   0.81  previous:   0.81  best so far:   0.81
+        Local improvement
+        Global improvement - best f-score updated
+    
+    Iteration =     9  T =     0.289000
+    selected move: scale_pos_weight: from 400.00 to 500.00
+    Parameters:
+    eta :  0.05  colsample_bytree :  1.0  scale_pos_weight :  500  gamma :  0.15  max_depth :  15  subsample :  0.5  
     
         F-Score:   0.82  previous:   0.81  best so far:   0.81
         Local improvement
         Global improvement - best f-score updated
-    
-    Iteration =     3  T =     0.340000
-    selected move: max_depth : from  10.00 to  15.00
-    Parameters:
-    max_depth :  15  gamma :  0.15  eta :  0.01  colsample_bytree :  0.7  scale_pos_weight :  40  subsample :  1.0  
-    
-        F-Score:   0.82  previous:   0.82  best so far:   0.82
-        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.0906 -> accepted
-    
-......
-
-    
-
-    
-    Iteration =    94  T =     0.018240
-    selected move: max_depth : from  15.00 to  10.00
-    
-    Combination revisited - searching again
-    selected move: subsample : from   0.80 to   0.90
-    Parameters:
-    max_depth :  15  gamma :  0.05  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.9  
-    
-        F-Score:   0.83  previous:   0.83  best so far:   0.83
-        Worse result. F-Score change:  -0.0044  threshold: 0.7331  random number: 0.0876 -> accepted
-    
-    Iteration =    95  T =     0.018240
-    selected move: gamma     : from   0.05 to   0.00
-    Parameters:
-    max_depth :  15  gamma :  0.0  scale_pos_weight :  40  colsample_bytree :  0.9  eta :  0.2  subsample :  0.9  
-    
-        F-Score:   0.83  previous:   0.83  best so far:   0.83
-        Local improvement
+ 
+...
     
     Iteration =    96  T =     0.015504
-    selected move: gamma     : from   0.00 to   0.05
-    
-    Combination revisited - searching again
-    selected move: max_depth : from  15.00 to  10.00
+    selected move: scale_pos_weight: from 500.00 to 600.00
     Parameters:
-    max_depth :  10  gamma :  0.0  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.9  
+    eta :  0.1  colsample_bytree :  1.0  scale_pos_weight :  600  gamma :  0.1  max_depth :  15  subsample :  0.5  
     
-        F-Score:   0.84  previous:   0.83  best so far:   0.83
-        Local improvement
-        Global improvement - best f-score updated
+        F-Score:   0.81  previous:   0.82  best so far:   0.86
+        Worse result. F-Score change:  -0.0029  threshold: 0.7819  random number: 0.4103 -> accepted
     
     Iteration =    97  T =     0.015504
-    selected move: colsample_bytree: from   0.90 to   1.00
+    selected move: max_depth : from  15.00 to  20.00
     Parameters:
-    max_depth :  10  gamma :  0.0  scale_pos_weight :  40  colsample_bytree :  1.0  eta :  0.2  subsample :  0.9  
+    eta :  0.1  colsample_bytree :  1.0  scale_pos_weight :  600  gamma :  0.1  max_depth :  20  subsample :  0.5  
     
-        F-Score:   0.82  previous:   0.84  best so far:   0.84
-        Worse result. F-Score change:  -0.0153  threshold: 0.2770  random number: 0.3914 -> rejected
+        F-Score:   0.82  previous:   0.81  best so far:   0.86
+        Local improvement
     
     Iteration =    98  T =     0.015504
-    selected move: scale_pos_weight: from  40.00 to  50.00
+    selected move: scale_pos_weight: from 600.00 to 500.00
     Parameters:
-    max_depth :  10  gamma :  0.0  scale_pos_weight :  50  colsample_bytree :  0.9  eta :  0.2  subsample :  0.9  
+    eta :  0.1  colsample_bytree :  1.0  scale_pos_weight :  500  gamma :  0.1  max_depth :  20  subsample :  0.5  
     
-        F-Score:   0.82  previous:   0.84  best so far:   0.84
-        Worse result. F-Score change:  -0.0166  threshold: 0.2479  random number: 0.2071 -> accepted
+        F-Score:   0.82  previous:   0.82  best so far:   0.86
+        Worse result. F-Score change:  -0.0055  threshold: 0.6282  random number: 0.5258 -> accepted
     
     Iteration =    99  T =     0.015504
-    selected move: subsample : from   0.90 to   0.80
+    selected move: subsample : from   0.50 to   0.60
+    
+    Combination revisited - searching again
+    selected move: gamma     : from   0.10 to   0.15
     Parameters:
-    max_depth :  10  gamma :  0.0  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  50  subsample :  0.8  
+    eta :  0.1  colsample_bytree :  1.0  scale_pos_weight :  500  gamma :  0.15  max_depth :  20  subsample :  0.5  
     
-        F-Score:   0.82  previous:   0.82  best so far:   0.84
-        Worse result. F-Score change:  -0.0013  threshold: 0.8934  random number: 0.3812 -> accepted
+        F-Score:   0.82  previous:   0.82  best so far:   0.86
+        Worse result. F-Score change:   0.0000  threshold: 1.0000  random number: 0.2742 -> accepted
     
-      25.7 minutes process time
+      19.2 minutes process time
     
     Best variable parameters found:
     
-    {'max_depth': 10, 'gamma': 0.0, 'eta': 0.2, 'colsample_bytree': 0.9, 'scale_pos_weight': 40, 'subsample': 0.9}
+    {'eta': 0.4, 'colsample_bytree': 1.0, 'scale_pos_weight': 50, 'gamma': 0.1, 'max_depth': 15, 'subsample': 0.5}
     
 
-## Evaluation on the test dataset.
+###### Evaluation on the test dataset.
 
-The evaluation on the test dataset results to an F-Score of 0.84 which is considered good given the high imbalance in the classes. The run time was 26 minutes on a 64-bit Windows system with 6GB RAM and an Intel Core i3 processor 2.30GHz. 
+The evaluation on the test dataset results to an F-Score of 0.86 which is considered good given the high imbalance in the classes. The run time was 19 minutes on a 64-bit Windows system with 6GB RAM and an Intel Core i3 processor 2.30GHz. 
 
 The best hyper-parameters found are in the ranges expected to be good according to all sources. One can then proceed this way:
 * Narrowing the ranges of these hyper-parameters,   
@@ -643,6 +692,7 @@ print(best_params)
 print('\nEvaluation on the test dataset\n')  
 
 best_f_score,best_model=do_train(best_params, param, dtrain,'train',trainY,dtest,'test',testY,print_conf_matrix=True)
+
 
 print('\nF-score on the test dataset: {:6.2f}'.format(best_f_score))
 
@@ -664,33 +714,29 @@ print('\nVariables importance:\n')
 
 p = xgb.plot_importance(best_model) 
 plt.show()
-
-with pd.option_context('display.max_rows', None, 'display.max_columns', 3):
-    print(results)
-
 ```
 
     
     Best parameters found:
     
-    {'max_depth': 10, 'gamma': 0.0, 'eta': 0.2, 'colsample_bytree': 0.9, 'scale_pos_weight': 40, 'subsample': 0.9}
+    {'eta': 0.4, 'colsample_bytree': 1.0, 'scale_pos_weight': 50, 'gamma': 0.1, 'max_depth': 15, 'subsample': 0.5}
     
     Evaluation on the test dataset
     
     Parameters:
-    max_depth :  10  gamma :  0.0  eta :  0.2  colsample_bytree :  0.9  scale_pos_weight :  40  subsample :  0.9  
+    eta :  0.4  colsample_bytree :  1.0  scale_pos_weight :  50  gamma :  0.1  max_depth :  15  subsample :  0.5  
     
     
     confusion matrix
     ----------------
-    tn: 85289 fp:    16
-    fn:    27 tp:   110
+    tn: 85265 fp:    18
+    fn:    25 tp:   134
     
-    F-score on the test dataset:   0.84
+    F-score on the test dataset:   0.86
     
 
 
-![png](Images/output_17_1.png?raw=true)
+![png](Images\output_17_1.png?raw=true)
 
 
     
@@ -699,9 +745,5 @@ with pd.option_context('display.max_rows', None, 'display.max_columns', 3):
     
 
 
-![png](Images/output_17_3.png?raw=true)
-
-
-
-
+![png](Images\output_17_3.png?raw=true)
 
